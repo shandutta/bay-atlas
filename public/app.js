@@ -12,7 +12,7 @@
   // Nine-county extent, including northern Sonoma/Napa and southern Santa Clara.
   // U.S. Census 2025 county cartographic boundaries, rounded outward.
   const boundsBay = L.latLngBounds([[36.89,-123.54],[38.87,-121.20]]);
-  const map = L.map('map',{zoomControl:false,minZoom:7,maxZoom:19,tap:true,preferCanvas:true}).setView([37.823,-122.18],11);
+  const map = L.map('map',{zoomControl:false,minZoom:7,maxZoom:19,tap:true,preferCanvas:true,trackResize:false}).setView([37.823,-122.18],11);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',crossOrigin:true}).addTo(map);
   L.control.zoom({position:'topright'}).addTo(map);
   map.createPane('surface'); map.getPane('surface').style.zIndex = 350;
@@ -514,7 +514,36 @@
     catch (error) { providerControls(); showMapNotice(error.message); $('provider-message').textContent = error.message; }
   });
   document.addEventListener('keydown',event => { if (event.key === 'Escape') addressSearch.cancel(); });
-  window.addEventListener('resize',() => map.invalidateSize());
+  function installMapResize(map, element) {
+    let frame = null, width = 0, height = 0;
+    const sync = () => {
+      frame = null;
+      const nextWidth = element.clientWidth, nextHeight = element.clientHeight;
+      if (!nextWidth || !nextHeight || (nextWidth === width && nextHeight === height)) return;
+      width = nextWidth; height = nextHeight;
+      // Mobile browser bars and keyboards can change 100dvh without a window
+      // resize. Re-measure the actual map and update tiles without a second pan.
+      map.invalidateSize({pan:false,debounceMoveend:true});
+    };
+    const schedule = () => { if (frame === null) frame = requestAnimationFrame(sync); };
+    const visible = () => { if (!document.hidden) schedule(); };
+    const observer = window.ResizeObserver ? new window.ResizeObserver(schedule) : null;
+    observer?.observe(element);
+    window.addEventListener('resize',schedule);
+    window.addEventListener('pageshow',schedule);
+    window.visualViewport?.addEventListener('resize',schedule);
+    document.addEventListener('visibilitychange',visible);
+    map.on('unload',() => {
+      observer?.disconnect();
+      if (frame !== null) cancelAnimationFrame(frame);
+      window.removeEventListener('resize',schedule);
+      window.removeEventListener('pageshow',schedule);
+      window.visualViewport?.removeEventListener('resize',schedule);
+      document.removeEventListener('visibilitychange',visible);
+    });
+    schedule();
+  }
+  installMapResize(map,$('map'));
   loadData();
   api('refresh').then(applyRefresh).catch(() => {});
   // Reload local data only. New provider requests require the explicit refresh button.
