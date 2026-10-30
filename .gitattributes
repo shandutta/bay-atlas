@@ -1,0 +1,2 @@
+* text=auto
+public/vendor/* -text -whitespace

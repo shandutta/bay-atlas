@@ -1,0 +1,248 @@
+[
+  {
+    "_synthetic_fixture": true,
+    "zpid": "900001",
+    "propertyUrl": "https://www.zillow.com/homedetails/900001_zpid/",
+    "listingStatus": "sold",
+    "listingSoldPrice": {
+      "amount": 1500000,
+      "currency": "USD",
+      "formatted": "$1,500,000"
+    },
+    "dateSold": "2026-10-26T00:00:00.000Z",
+    "lastSoldPrice": 1501000,
+    "detailsSource": "page+graphql",
+    "listingAddress": {
+      "street": "100 Synthetic Example Ave",
+      "unit": null,
+      "city": "Berkeley",
+      "state": "CA",
+      "zipCode": "94700",
+      "county": "Alameda County",
+      "country": "USA",
+      "neighborhood": null,
+      "subdivision": null,
+      "communityName": null,
+      "timeZone": "America/Los_Angeles",
+      "full": "100 Synthetic Example Ave, Berkeley, CA 94700"
+    },
+    "coordinates": {
+      "latitude": 37.86,
+      "longitude": -122.25
+    },
+    "homeType": "SINGLE_FAMILY",
+    "livingArea": 2400,
+    "bedrooms": 3,
+    "resoFacts": {
+      "propertySubType": [
+        "Single Family Residence"
+      ],
+      "hasAttachedProperty": false,
+      "hasAttachedGarage": false,
+      "parkingFeatures": [
+        "Detached"
+      ]
+    },
+    "listingPriceHistory": [
+      {
+        "date": "2026-10-26",
+        "event": "Sold",
+        "price": 1501000,
+        "sourceType": "mls",
+        "postingIsRental": false
+      },
+      {
+        "date": "2026-10-01",
+        "event": "Pending sale",
+        "price": 1200000,
+        "sourceType": "mls",
+        "postingIsRental": false
+      },
+      {
+        "date": "2026-09-01",
+        "event": "Listed for sale",
+        "price": 1200000,
+        "sourceType": "mls",
+        "postingIsRental": false
+      },
+      {
+        "date": "2026-03-01",
+        "event": "Listed for rent",
+        "price": 6000,
+        "sourceType": "zillow",
+        "postingIsRental": true
+      },
+      {
+        "date": "2025-06-01",
+        "event": "Sold",
+        "price": 700000,
+        "sourceType": "publicRecord",
+        "postingIsRental": false
+      }
+    ]
+  },
+  {
+    "_synthetic_fixture": true,
+    "zpid": "900002",
+    "propertyUrl": "https://www.zillow.com/homedetails/900002_zpid/",
+    "listingStatus": "sold",
+    "listingSoldPrice": {
+      "amount": 1700000,
+      "currency": "USD",
+      "formatted": "$1,700,000"
+    },
+    "dateSold": "2026-10-23T00:00:00.000Z",
+    "lastSoldPrice": 1702000,
+    "detailsSource": "page+graphql",
+    "listingAddress": {
+      "street": "200 Synthetic Example Ave",
+      "unit": null,
+      "city": "Berkeley",
+      "state": "CA",
+      "zipCode": "94700",
+      "county": "Alameda County",
+      "country": "USA",
+      "neighborhood": null,
+      "subdivision": null,
+      "communityName": null,
+      "timeZone": "America/Los_Angeles",
+      "full": "200 Synthetic Example Ave, Berkeley, CA 94700"
+    },
+    "coordinates": {
+      "latitude": 37.870000000000005,
+      "longitude": -122.25
+    },
+    "homeType": "SINGLE_FAMILY",
+    "livingArea": 2600,
+    "bedrooms": 4,
+    "resoFacts": {
+      "propertySubType": [
+        "Single Family Residence"
+      ],
+      "hasAttachedProperty": false,
+      "hasAttachedGarage": true,
+      "parkingFeatures": [
+        "Attached"
+      ]
+    },
+    "listingPriceHistory": [
+      {
+        "date": "2026-10-23",
+        "event": "Sold",
+        "price": 1702000,
+        "sourceType": "mls",
+        "postingIsRental": false
+      },
+      {
+        "date": "2026-10-01",
+        "event": "Pending sale",
+        "price": 1200000,
+        "sourceType": "mls",
+        "postingIsRental": false
+      },
+      {
+        "date": "2026-09-01",
+        "event": "Listed for sale",
+        "price": 1200000,
+        "sourceType": "mls",
+        "postingIsRental": false
+      },
+      {
+        "date": "2026-03-01",
+        "event": "Listed for rent",
+        "price": 6000,
+        "sourceType": "zillow",
+        "postingIsRental": true
+      },
+      {
+        "date": "2025-06-01",
+        "event": "Sold",
+        "price": 700000,
+        "sourceType": "publicRecord",
+        "postingIsRental": false
+      }
+    ]
+  },
+  {
+    "_synthetic_fixture": true,
+    "zpid": "900003",
+    "propertyUrl": "https://www.zillow.com/homedetails/900003_zpid/",
+    "listingStatus": "sold",
+    "listingSoldPrice": {
+      "amount": 1900000,
+      "currency": "USD",
+      "formatted": "$1,900,000"
+    },
+    "dateSold": "2026-10-23T00:00:00.000Z",
+    "lastSoldPrice": 1903000,
+    "detailsSource": "page+graphql",
+    "listingAddress": {
+      "street": "300 Synthetic Example Ave",
+      "unit": null,
+      "city": "Berkeley",
+      "state": "CA",
+      "zipCode": "94700",
+      "county": "Alameda County",
+      "country": "USA",
+      "neighborhood": null,
+      "subdivision": null,
+      "communityName": null,
+      "timeZone": "America/Los_Angeles",
+      "full": "300 Synthetic Example Ave, Berkeley, CA 94700"
+    },
+    "coordinates": {
+      "latitude": 37.88,
+      "longitude": -122.25
+    },
+    "homeType": "SINGLE_FAMILY",
+    "livingArea": 2800,
+    "bedrooms": 5,
+    "resoFacts": {
+      "propertySubType": [
+        "Single Family Residence"
+      ],
+      "hasAttachedProperty": true,
+      "hasAttachedGarage": false,
+      "parkingFeatures": [
+        "Detached"
+      ]
+    },
+    "listingPriceHistory": [
+      {
+        "date": "2026-10-23",
+        "event": "Sold",
+        "price": 1903000,
+        "sourceType": "mls",
+        "postingIsRental": false
+      },
+      {
+        "date": "2026-10-01",
+        "event": "Pending sale",
+        "price": 1200000,
+        "sourceType": "mls",
+        "postingIsRental": false
+      },
+      {
+        "date": "2026-09-01",
+        "event": "Listed for sale",
+        "price": 1200000,
+        "sourceType": "mls",
+        "postingIsRental": false
+      },
+      {
+        "date": "2026-03-01",
+        "event": "Listed for rent",
+        "price": 6000,
+        "sourceType": "zillow",
+        "postingIsRental": true
+      },
+      {
+        "date": "2025-06-01",
+        "event": "Sold",
+        "price": 700000,
+        "sourceType": "publicRecord",
+        "postingIsRental": false
+      }
+    ]
+  }
+]

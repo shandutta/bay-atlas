@@ -1,0 +1,25 @@
+# Private operational state and imported property records
+/private/
+/data/
+/artifacts/
+/backups/
+*.csv
+*.har
+*.log
+*.sqlite
+*.sqlite3
+*.db
+*.pem
+*.key
+.env
+.env.*
+
+# Local runtimes and build output
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+node_modules/
+coverage/
+.pytest_cache/
+.DS_Store
