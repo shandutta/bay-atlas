@@ -21,8 +21,19 @@
   const worker = new Worker('surface-worker.js');
   const canvas = L.DomUtil.create('canvas','price-surface',map.getPane('surface'));
   const surfaceContext = canvas.getContext('2d');
+  // Reuse Leaflet's geographic image positioning for the canvas. Its inherited
+  // zoom/viewreset/zoomanim handlers keep existing pixels aligned during pans,
+  // button/wheel zooms and continuous pinch zooms, without encoding an image.
+  const CanvasOverlay = L.ImageOverlay.extend({
+    _initImage() {
+      this._image = canvas;
+      L.DomUtil.addClass(canvas,'leaflet-image-layer');
+      if (this._zoomAnimated) L.DomUtil.addClass(canvas,'leaflet-zoom-animated');
+    }
+  });
+  const surfaceOverlay = new CanvasOverlay('',boundsEast,{pane:'surface',interactive:false});
   const stops = [[89,123,156],[91,155,153],[168,189,134],[223,189,112],[200,120,84]];
-  let marker = null, renderTimer = null;
+  let marker = null, renderTimer = null, surfaceMoving = false;
   function fitRegion(bounds) {
     const mobile = window.innerWidth <= 700;
     map.fitBounds(bounds,{paddingTopLeft:mobile ? [12,60] : [385,55],paddingBottomRight:mobile ? [12,map.getSize().y * .44] : [60,45],animate:false});
@@ -56,20 +67,25 @@
   }
   function renderSurface() {
     if (!state.surface || state.surfaceFailed || !state.sales.length) { worker.postMessage({type:'cancel'}); canvas.style.display = 'none'; $('map-loading').hidden = true; return; }
+    if (surfaceMoving) return;
     const size = map.getSize();
+    // A modest margin keeps nearby shading available during ordinary drags.
+    // Newly exposed territory beyond it is calculated when movement settles.
+    const padding = size.multiplyBy(.2).ceil(), rasterSize = size.add(padding.multiplyBy(2));
     // Every low-resolution pixel is an independently estimated scalar sample.
     // Browser bilinear interpolation makes the visible color field continuous.
     const baseStep = window.innerWidth <= 700 ? 11 : 14;
     const centerPoint = size.divideBy(2), metersPerPixel = map.distance(map.containerPointToLatLng(centerPoint), map.containerPointToLatLng(centerPoint.add([1,0])));
-    const step = Math.max(3, Math.ceil(Math.sqrt(size.x * size.y / 60000)), Math.min(baseStep, Math.floor(700 / metersPerPixel)));
-    const width = Math.ceil(size.x / step) + 1, height = Math.ceil(size.y / step) + 1, points = new Float64Array(width * height * 2);
+    const step = Math.max(3, Math.ceil(Math.sqrt(rasterSize.x * rasterSize.y / 60000)), Math.min(baseStep, Math.floor(700 / metersPerPixel)));
+    const width = Math.ceil(rasterSize.x / step) + 1, height = Math.ceil(rasterSize.y / step) + 1, points = new Float64Array(width * height * 2);
     for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-      const ll = map.containerPointToLatLng([x * step,y * step]), offset = (y * width + x) * 2;
+      const ll = map.containerPointToLatLng([x * step - padding.x,y * step - padding.y]), offset = (y * width + x) * 2;
       points[offset] = ll.lat; points[offset + 1] = ll.lng;
     }
-    const origin = map.containerPointToLayerPoint([0,0]);
+    const northWest = map.containerPointToLatLng(padding.multiplyBy(-1));
+    const southEast = map.containerPointToLatLng(size.add(padding));
     $('map-loading').hidden = false;
-    worker.postMessage({type:'render',id:++state.renderId,points,width,height,origin:{x:origin.x,y:origin.y,width:size.x,height:size.y,step},sqft:Number($('sqft').value),beds:Number($('beds').value)},[points.buffer]);
+    worker.postMessage({type:'render',id:++state.renderId,points,width,height,origin:{bounds:[[northWest.lat,northWest.lng],[southEast.lat,southEast.lng]],width:rasterSize.x,height:rasterSize.y,step},sqft:Number($('sqft').value),beds:Number($('beds').value)},[points.buffer]);
   }
   worker.onmessage = ({data}) => {
     if (data.id !== state.renderId) return;
@@ -82,10 +98,10 @@
       const rgb = color(value); img.data[i * 4] = rgb[0]; img.data[i * 4 + 1] = rgb[1]; img.data[i * 4 + 2] = rgb[2]; img.data[i * 4 + 3] = Math.round(255 * (.25 + .4 * Math.max(0, (support - .24) / .76)));
     }
     ctx.putImageData(img,0,0); canvas.width = data.origin.width; canvas.height = data.origin.height;
-    canvas.style.width = `${data.origin.width}px`; canvas.style.height = `${data.origin.height}px`;
-    L.DomUtil.setPosition(canvas,L.point(data.origin.x,data.origin.y));
     surfaceContext.clearRect(0,0,canvas.width,canvas.height); surfaceContext.imageSmoothingEnabled = true; surfaceContext.imageSmoothingQuality = 'high';
     surfaceContext.drawImage(mini,-data.origin.step / 2,-data.origin.step / 2,data.width * data.origin.step,data.height * data.origin.step);
+    surfaceOverlay.setBounds(data.origin.bounds);
+    if (!map.hasLayer(surfaceOverlay)) surfaceOverlay.addTo(map);
     canvas.style.display = 'block';
   };
   worker.onerror = () => {
@@ -93,8 +109,9 @@
     $('toggle-surface').disabled = true;
     showMapNotice('The price surface could not load. Address estimates are still available. Reload the page to retry shading.');
   };
-  map.on('movestart',() => { clearTimeout(renderTimer); canvas.style.display = 'none'; ++state.renderId; worker.postMessage({type:'cancel'}); });
-  map.on('moveend resize',scheduleSurface);
+  map.on('movestart',() => { surfaceMoving = true; clearTimeout(renderTimer); ++state.renderId; worker.postMessage({type:'cancel'}); $('map-loading').hidden = true; });
+  map.on('moveend',() => { surfaceMoving = false; scheduleSurface(); });
+  map.on('resize',scheduleSurface);
   function showMapNotice(message) { $('map-notice-text').textContent = message; $('map-notice').hidden = !message; }
   function renderSaleDots() {
     salesLayer.clearLayers();

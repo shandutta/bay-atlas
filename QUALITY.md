@@ -33,7 +33,7 @@ An optional baseline worker file can be supplied as its first argument for a loc
 
 ## Design and reliability changes
 
-Supporting text has stronger contrast; dialogs have accessible names; region selections expose pressed state. Mobile details can be expanded and collapsed using the handle or keyboard. Old estimates are hidden immediately when the subject changes, and obsolete requests are cancelled. Map pans reuse formatters and bounds, and sale popups are created when opened. The interface reports partial coverage and the 3,000 visible-sale-dot cap explicitly.
+Supporting text has stronger contrast; dialogs have accessible names; region selections expose pressed state. Mobile details can be expanded and collapsed using the handle or keyboard. Old estimates are hidden immediately when the subject changes, and obsolete requests are cancelled. Map pans reuse formatters and bounds, and sale popups are created when opened. The last price raster stays geographically anchored during dragging and zooming; a 20% margin on each edge covers nearby movement, and a fresh raster replaces it after movement ends. Large moves can expose territory outside that margin until recalculation completes. The interface reports partial coverage and the 3,000 visible-sale-dot cap explicitly.
 
 Snapshot responses reuse serialized data; static assets support conditional requests. HTTP host/origin validation, request framing, body limits, and timeouts protect the local API boundary. Address caches are bounded, and malformed datasets or provider responses produce actionable errors.
 
