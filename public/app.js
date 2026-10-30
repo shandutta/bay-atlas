@@ -12,9 +12,21 @@
   // Nine-county extent, including northern Sonoma/Napa and southern Santa Clara.
   // U.S. Census 2025 county cartographic boundaries, rounded outward.
   const boundsBay = L.latLngBounds([[36.89,-123.54],[38.87,-121.20]]);
-  const map = L.map('map',{zoomControl:false,minZoom:7,maxZoom:19,tap:true,preferCanvas:true,trackResize:false}).setView([37.823,-122.18],11);
+  const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const zoomAnimationAvailable = !motionPreference.matches;
+  const MotionMap = L.Map.extend({
+    panBy(offset,options) { return L.Map.prototype.panBy.call(this,offset,motionPreference.matches ? {...options,animate:false} : options); },
+    setView(center,zoom,options) { return L.Map.prototype.setView.call(this,center,zoom,motionPreference.matches ? {...options,animate:false} : options); }
+  });
+  const map = new MotionMap('map',{zoomControl:false,minZoom:7,maxZoom:19,tap:true,preferCanvas:true,trackResize:false,inertia:!motionPreference.matches,zoomAnimation:!motionPreference.matches,fadeAnimation:false,markerZoomAnimation:!motionPreference.matches}).setView([37.823,-122.18],11);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',crossOrigin:true}).addTo(map);
   L.control.zoom({position:'topright'}).addTo(map);
+  motionPreference.addEventListener('change',() => {
+    map.stop(); map.options.inertia = !motionPreference.matches;
+    // Pinch release checks this option directly, bypassing setView. Tile fades
+    // stay disabled because Leaflet caches that choice when it builds the map.
+    map.options.zoomAnimation = zoomAnimationAvailable && !motionPreference.matches;
+  });
   map.createPane('surface'); map.getPane('surface').style.zIndex = 350;
   map.createPane('saleDots'); map.getPane('saleDots').style.zIndex = 410;
   const salesLayer = L.layerGroup();
@@ -36,7 +48,7 @@
   let marker = null, renderTimer = null, surfaceMoving = false;
   function fitRegion(bounds) {
     const mobile = window.innerWidth <= 700;
-    map.fitBounds(bounds,{paddingTopLeft:mobile ? [12,60] : [385,55],paddingBottomRight:mobile ? [12,map.getSize().y * .44] : [60,45],animate:false});
+    map.fitBounds(bounds,{paddingTopLeft:mobile ? [12,60] : [385,55],paddingBottomRight:mobile ? [12,$('explorer-panel').getBoundingClientRect().height + 18] : [60,45],animate:false});
   }
   fitRegion(boundsEast);
   async function api(path, options={}) {
@@ -138,6 +150,8 @@
     const updated = meta.updated_at || meta.last_updated;
     $('updated-at').textContent = updated ? `Data updated ${new Date(updated).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}` : 'No data refresh completed yet';
     const warnings = Array.isArray(meta.warnings) ? meta.warnings.join(' ') : '';
+    const gaps = (meta.coverage?.verified_source_gaps || []).filter(g => Number(g.unreachable_count) > 0);
+    const gapSummary = gaps.map(g => `${g.county}: ${number(g.unreachable_count)} listings could not be retrieved`).join('; ');
     const message = meta.message || warnings;
     const sources = [...new Set(state.sales.map(s => saleSource(s.source_url)?.label).filter(Boolean))];
     const hasRedfin = sources.includes('Redfin');
@@ -149,11 +163,11 @@
       showMapNotice('The map is ready. Add dated sales to see price shading.');
     } else {
       $('data-notice').hidden = !partial && !hasRedfin;
-      $('data-notice').textContent = `${partial ? 'Partial sale coverage. ' : ''}${meta.coverage?.refresh_mode === 'automatic_api' ? `${meta.coverage.counties_completed || 0}/9 county searches finished. Finished searches can still have missing records. View source details for known gaps; Update data shows available import options.` : hasRedfin ? 'Use Update data for the Zillow API connection or to import a newer Redfin CSV.' : 'Use Update data to add recent sales or manage the data connection.'}`;
+      $('data-notice').textContent = `${partial ? 'Partial sale coverage. ' : ''}${gapSummary ? `${gapSummary}. Blank areas need additional sales data. ` : ''}${meta.coverage?.refresh_mode === 'automatic_api' ? `${meta.coverage.counties_completed || 0}/9 county searches finished. Finished searches can still have missing records. View source details for known gaps; Update data shows available import options.` : hasRedfin ? 'Use Update data for the Zillow API connection or to import a newer Redfin CSV.' : 'Use Update data to add recent sales or manage the data connection.'}`;
       showMapNotice(partial ? `Partial snapshot · ${number(state.sales.length)} eligible sales.` : '');
     }
     const coverage = typeof meta.coverage === 'string' ? meta.coverage : (meta.coverage?.description || meta.coverage?.label || 'Coverage is limited to imported sales.');
-    $('source-detail').textContent = `Source: ${typeof meta.source === 'string' ? meta.source : `${sources.join(' and ') || 'Imported'} sold-home records`}. ${coverage} ${number(state.sales.length)} eligible homes loaded. ${updated ? `Last updated ${new Date(updated).toLocaleString()}.` : 'No successful data refresh yet.'} ${warnings}`;
+    $('source-detail').textContent = `Source: ${typeof meta.source === 'string' ? meta.source : `${sources.join(' and ') || 'Imported'} sold-home records`}. ${coverage} ${number(state.sales.length)} eligible homes loaded. ${gapSummary ? `Known source gaps: ${gapSummary}.` : ''} ${updated ? `Last updated ${new Date(updated).toLocaleString()}.` : 'No successful data refresh yet.'} ${warnings}`;
     if (data.model?.time_buckets) {
       const buckets = data.model.time_buckets;
       $('method-weights').innerHTML = buckets.map(b => `<span>${esc(b.label)}<strong>${Number(b.weight).toFixed(2)}×</strong></span>`).join('');
@@ -193,14 +207,14 @@
     state.selected = {lat:Number(lat),lng:Number(lng),label:label || `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}`};
     if (marker) { clearEstimateTooltip(); map.removeLayer(marker); }
     marker = L.marker([lat,lng],{icon:L.divIcon({className:'',html:'<span class="selected-marker"></span>',iconSize:[28,28],iconAnchor:[14,14]}),keyboard:true,title:state.selected.label}).addTo(map);
-    if (move) {
-      const mobile = window.innerWidth <= 700, zoom = Math.max(map.getZoom(),14), point = map.project([lat,lng],zoom);
-      const center = point.add(mobile ? [0,map.getSize().y * .18] : [-150,0]);
+    if (window.innerWidth <= 700) panelControls.setExpanded(true);
+    if (move || window.innerWidth <= 700) {
+      const mobile = window.innerWidth <= 700, zoom = move ? Math.max(map.getZoom(),14) : map.getZoom(), point = map.project([lat,lng],zoom);
+      const center = point.add(mobile ? [0,panelControls.height() / 2] : [-150,0]);
       map.setView(map.unproject(center,zoom),zoom,{animate:!window.matchMedia('(prefers-reduced-motion: reduce)').matches});
     }
     $('welcome-state').hidden = true; $('estimate-section').hidden = false;
     const selected = state.selected, interaction = panelControls.interaction();
-    if (window.innerWidth <= 700) panelControls.setExpanded(true);
     await fetchEstimate();
     if (window.innerWidth <= 700 && state.selected === selected && panelControls.interaction() === interaction && $('explorer-panel').classList.contains('expanded')) {
       requestAnimationFrame(() => {
@@ -217,6 +231,10 @@
     const label = `<p class="estimate-location"><span aria-hidden="true">⌖</span><span>${esc(state.selected.label)}</span></p>`;
     if (!good) {
       $('estimate-section').innerHTML = `${label}<div class="estimate-empty"><h3>More nearby sales<br>would make this clearer.</h3><p>${esc(data.message || 'There are not enough recent comparable sales here to give a supported estimate.')} ${count ? `${number(count)} comparable ${count === 1 ? 'home was' : 'homes were'} found.` : ''}</p></div>`;
+      if (state.data?.coverage?.complete !== true) {
+        $('estimate-section').insertAdjacentHTML('beforeend','<p class="estimate-note">This snapshot has incomplete coverage. An unshaded area means missing evidence, not low home values.</p><button type="button" class="text-button" id="estimate-coverage">View coverage details ↗</button>');
+        $('estimate-coverage').addEventListener('click',openMethod);
+      }
       clearEstimateTooltip(); return;
     }
     const low = data.range_ppsf?.low ?? data.low_ppsf, high = data.range_ppsf?.high ?? data.high_ppsf;
@@ -252,7 +270,7 @@
     }
     function cancel() {
       ++sequence; clearTimeout(timer); controller?.abort(); controller = null;
-      input.removeAttribute('aria-busy'); close(); submit.disabled = false;
+      input.removeAttribute('aria-busy'); close(); submit.disabled = false; status.textContent = '';
     }
     function highlight(index) {
       active = index;
@@ -289,9 +307,10 @@
           }
           if (request !== sequence || input.value.trim() !== query || document.activeElement !== input) return;
           show(data.results || []);
+          status.textContent = data.message || ((data.remote_status === 'unavailable' && !results.length) ? 'Suggestions are temporarily unavailable. You can still search a full address.' : '');
         } catch (error) {
           // Explicit full-address search remains available when suggestions fail.
-          if (request === sequence && error.name !== 'AbortError') close();
+          if (request === sequence && error.name !== 'AbortError') { close(); status.textContent = 'Suggestions are temporarily unavailable. You can still search a full address.'; }
         } finally { if (request === sequence) input.removeAttribute('aria-busy'); }
       },650);
     });
@@ -313,9 +332,9 @@
         const data = await fetchJson(`geocode?q=${encodeURIComponent(query)}`,{signal:controller.signal});
         if (request !== sequence || input.value.trim() !== query) return;
         const rows = data.results || (data.lat ? [data] : []);
-        if (!rows.length) { status.textContent = 'No match found. Try a full street address with a city or ZIP code.'; return; }
+        if (!rows.length) { status.textContent = data.message || 'No match found. Add a city or ZIP code, or choose a point on the map.'; return; }
         status.textContent = '';
-        if (rows.length === 1) { const r = rows[0]; cancel(); input.blur(); onSelect(r.lat,r.lng,r.display_name || query); }
+        if (rows.length === 1 && !String(rows[0].precision || '').toLowerCase().startsWith('approximate')) { show(rows); choose(0); }
         else { show(rows); input.focus(); }
       } catch (error) { if (request === sequence) status.textContent = error.message; }
       finally { if (request === sequence) submit.disabled = false; }
@@ -338,39 +357,69 @@
   function openMethod() { $('method-dialog').showModal(); }
   $('source-button').addEventListener('click',openMethod); $('method-button').addEventListener('click',openMethod);
   $('close-method').addEventListener('click',() => $('method-dialog').close());
-  function installPanelDrag(panel,handle,header) {
-    let drag = null, suppressClickUntil = 0, interactions = 0;
-    function setExpanded(expanded, manual = false) {
+  function installPanelDrag(panel,handle,header,onMinimize = () => {}) {
+    const content = panel.querySelector('.panel-scroll'), label = handle.querySelector('.panel-handle-label');
+    let drag = null, suppressClickUntil = 0, interactions = 0, snap = 1, lastOpen = 1;
+    const mobile = () => window.innerWidth <= 700;
+    function heights() {
+      const available = panel.parentElement.clientHeight;
+      const middle = Math.min(available - 44,Math.max(230,Math.min(520,available * .43)));
+      return [64,middle,Math.max(middle,available * .75)];
+    }
+    function paintHeight(height) {
+      panel.parentElement.style.setProperty('--panel-height',`${height}px`);
+    }
+    function setSnap(next, manual = false) {
       if (manual) ++interactions;
-      panel.classList.toggle('expanded',expanded);
-      handle.setAttribute('aria-expanded',String(expanded));
-      handle.setAttribute('aria-label',expanded ? 'Collapse details; drag down to see the map' : 'Expand details; drag up');
-      panel.style.height = ''; panel.classList.remove('dragging');
+      snap = Math.max(0,Math.min(2,next));
+      if (snap) lastOpen = snap;
+      else if (manual) onMinimize();
+      panel.classList.toggle('expanded',snap === 2);
+      panel.classList.toggle('minimized',snap === 0);
+      panel.classList.remove('dragging');
+      panel.parentElement.classList.remove('panel-dragging');
+      const collapsed = mobile() && snap === 0;
+      if (collapsed && content.contains(document.activeElement)) handle.focus({preventScroll:true});
+      content.inert = collapsed;
+      handle.setAttribute('aria-expanded',String(!collapsed));
+      handle.setAttribute('aria-label',collapsed ? 'Show address search and details; drag up to expand' : 'Show more map; drag down to collapse details');
+      label.textContent = collapsed ? 'Search or view estimate ↑' : 'Show map ↓';
+      paintHeight(heights()[snap]);
     }
     function begin(event) {
-      if (window.innerWidth > 700 || event.isPrimary === false || (event.pointerType === 'mouse' && event.button !== 0)) return;
+      if (!mobile() || event.isPrimary === false || (event.pointerType === 'mouse' && event.button !== 0)) return;
       if (event.target.closest('input,select,a') || drag) return;
-      drag = {id:event.pointerId,x:event.clientX,y:event.clientY,height:panel.getBoundingClientRect().height,expanded:panel.classList.contains('expanded'),moved:false};
+      drag = {id:event.pointerId,x:event.clientX,y:event.clientY,height:panel.getBoundingClientRect().height,snap,moved:false,traveled:false,lastY:event.clientY,lastTime:event.timeStamp,velocity:0};
       handle.setPointerCapture?.(event.pointerId);
     }
     function move(event) {
       if (!drag || event.pointerId !== drag.id) return;
       const dy = event.clientY - drag.y, dx = event.clientX - drag.x;
+      if (Math.hypot(dx,dy) >= 6) drag.traveled = true;
       if (!drag.moved && (Math.abs(dy) < 6 || Math.abs(dy) < Math.abs(dx))) return;
-      drag.moved = true; event.preventDefault(); panel.classList.add('dragging');
-      const available = panel.parentElement.clientHeight;
-      const low = Math.max(230,Math.min(520,available * .43)), high = Math.max(low,available * .75);
-      panel.style.height = `${Math.max(low,Math.min(high,drag.height - dy))}px`;
+      drag.moved = true; event.preventDefault();
+      panel.classList.add('dragging'); panel.parentElement.classList.add('panel-dragging');
+      const elapsed = event.timeStamp - drag.lastTime;
+      if (elapsed > 0) drag.velocity = (event.clientY - drag.lastY) / elapsed;
+      drag.lastY = event.clientY; drag.lastTime = event.timeStamp;
+      const stops = heights();
+      paintHeight(Math.max(stops[0],Math.min(stops[2],drag.height - dy)));
     }
     function end(event) {
       if (!drag || event.pointerId !== drag.id) return;
       const previous = drag; drag = null;
       if (handle.hasPointerCapture?.(event.pointerId)) handle.releasePointerCapture(event.pointerId);
-      if (!previous.moved) return;
+      if (!previous.moved) { if (previous.traveled) suppressClickUntil = Date.now() + 500; return; }
       suppressClickUntil = Date.now() + 500;
-      const dy = event.clientY - previous.y;
-      const expanded = event.type === 'pointercancel' ? previous.expanded : Math.abs(dy) >= 35 ? dy < 0 : previous.expanded;
-      setExpanded(expanded,true);
+      if (event.type === 'pointercancel' || event.type === 'lostpointercapture') { setSnap(previous.snap,true); return; }
+      const dy = event.clientY - previous.y, stops = heights();
+      const velocity = event.timeStamp - previous.lastTime < 120 ? previous.velocity : 0;
+      const projected = previous.height - dy - velocity * 120;
+      let next = stops.reduce((best,height,i) => Math.abs(height - projected) < Math.abs(stops[best] - projected) ? i : best,previous.snap);
+      if (Math.abs(dy) >= 35 || (Math.abs(dy) >= 12 && Math.abs(velocity) > .45)) {
+        next = dy > 0 ? Math.min(next,previous.snap - 1) : Math.max(next,previous.snap + 1);
+      }
+      setSnap(next,true);
     }
     for (const target of [handle,header]) {
       target.addEventListener('pointerdown',begin);
@@ -378,13 +427,27 @@
       target.addEventListener('pointerup',end);
       target.addEventListener('pointercancel',end);
     }
+    handle.addEventListener('lostpointercapture',end);
     handle.addEventListener('click',event => {
       if (event.detail !== 0 && Date.now() < suppressClickUntil) { event.preventDefault(); return; }
-      setExpanded(!panel.classList.contains('expanded'),true);
+      setSnap(snap === 0 ? lastOpen : 0,true);
     });
-    return {setExpanded,interaction:() => interactions};
+    handle.addEventListener('keydown',event => {
+      if (!['ArrowUp','ArrowDown','Home','End'].includes(event.key)) return;
+      event.preventDefault();
+      setSnap(event.key === 'Home' ? 0 : event.key === 'End' ? 2 : snap + (event.key === 'ArrowUp' ? 1 : -1),true);
+    });
+    // A reader who starts scrolling or editing takes priority over a late result.
+    for (const type of ['pointerdown','wheel','keydown']) content.addEventListener(type,() => ++interactions,{passive:true});
+    const resize = () => { if (!drag) setSnap(snap); };
+    window.addEventListener('resize',resize);
+    const observer = window.ResizeObserver ? new window.ResizeObserver(resize) : null;
+    observer?.observe(panel.parentElement);
+    setSnap(1);
+    return {setExpanded:(expanded,manual=false) => setSnap(expanded ? 2 : 1,manual),interaction:() => interactions,height:() => heights()[snap]};
   }
-  const panelControls = installPanelDrag($('explorer-panel'),$('panel-toggle'),document.querySelector('.intro'));
+  const panelControls = installPanelDrag($('explorer-panel'),$('panel-toggle'),document.querySelector('.intro'),() => addressSearch.cancel());
+  $('address').addEventListener('focus',() => { if (window.innerWidth <= 700) panelControls.setExpanded(true,true); });
   for (const dialog of [$('method-dialog'),$('connection-dialog')]) dialog.addEventListener('click',event => { if (event.target === dialog) { const rect = dialog.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close(); } });
   let connectedProvider = null;
   function providerControls() {

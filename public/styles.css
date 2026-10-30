@@ -43,3 +43,24 @@
 button:disabled{cursor:not-allowed}
 @media(min-width:701px){.panel-scroll{scroll-padding:20px}.search-input-wrap input{font-size:12px}.assumptions-grid label>span,.home-type,.comps-heading span{font-size:10px}}
 @media(max-width:700px){.search-help,.assumption-help{font-size:10px}.source-status{font-size:9px}.legend-note{font-size:9px}.legend-ticks{font-size:10px}}
+
+/* Drawer snap positions share their geometry with the map overlays. */
+@media(max-width:700px){
+  .explorer-panel,.explorer-panel.expanded{height:var(--panel-height,43%);min-height:0;max-height:none}
+  .panel-handle{height:44px;justify-content:center}
+  .panel-handle>.panel-grip{width:42px;height:5px}
+  .panel-handle>.panel-handle-label{position:absolute;right:20px;top:20px;width:auto;height:auto;background:none;font-size:10px;line-height:1.2;color:var(--muted)}
+  .panel-scroll{height:calc(100% - 44px)}
+  .explorer-panel.minimized .panel-scroll{visibility:hidden}
+  .explorer-panel.minimized .panel-handle{height:100%}
+  .explorer-panel.minimized .panel-handle-label{top:35px;left:0;right:0;text-align:center}
+  .explorer-panel.minimized .panel-grip{align-self:flex-start;margin-top:14px}
+  .map-legend{bottom:calc(var(--panel-height,43%) + 17px);transition:bottom .25s ease}
+  .map-loading{bottom:calc(var(--panel-height,43%) + 27px);transition:bottom .25s ease}
+  .leaflet-bottom.leaflet-right{bottom:var(--panel-height,43%);transition:bottom .25s ease}
+  .panel-dragging .map-legend,.panel-dragging .map-loading,.panel-dragging .leaflet-bottom.leaflet-right{transition:none}
+  .leaflet-control-zoom a{width:44px!important;height:44px!important;line-height:44px!important}
+}
+.dialog-top{position:sticky;top:-1px;background:var(--paper);z-index:1}
+.dialog-top button{min-width:44px;min-height:44px}
+.legend-heading button{min-width:44px;min-height:44px;margin:-14px -6px}

@@ -44,7 +44,7 @@ HOMES_ALLOWED_HOSTS=map.example.org python3 server.py --port 8788
 
 The frontend supports the root path or the `/homes/` prefix. Configure the proxy to forward to the loopback server. Host and same-origin checks reduce unwanted requests; they do not replace authentication. Keep provider credentials and imported sales out of publicly accessible directories and logs.
 
-Address autocomplete sends partial address text to Photon; submitted full-address geocoding uses the U.S. Census Geocoder. Browser map tiles come from OpenStreetMap. See [privacy and publication boundaries](PRIVACY.md).
+Address autocomplete sends partial address text to Photon; submitted searches check precise saved-sale and Photon matches before falling back to the U.S. Census Geocoder. Browser map tiles come from OpenStreetMap. See [privacy and publication boundaries](PRIVACY.md).
 
 ## Verify changes
 

@@ -40,3 +40,9 @@ Snapshot responses reuse serialized data; static assets support conditional requ
 ## Remaining limits
 
 This review is not a formal screen-reader or WCAG conformance audit. Native touch hardware, Safari, and Firefox were not exercised. Automated drag tests and a mobile browser viewport complement desktop interaction checks; physical pinch gestures were not tested. The estimate is a comparable-sales model without out-of-sample valuation validation. Provider completeness and listing classification remain data-quality limitations. Public services still determine remote geocoding and tile latency.
+
+## Interaction follow-up
+
+An independent interaction review led to three mobile drawer snap positions, a persistent tap control, native content scrolling, keyboard snap controls, and shared map-overlay geometry. Search and map selection now keep the selected marker above the expanded drawer. Manual minimization cancels a pending address lookup, and manual content interaction prevents late estimate scrolling. Reduced-motion settings cover map movement and pinch release; tile fades are disabled. See [the interaction review](INTERACTION_REVIEW.md) for the findings and browser evidence.
+
+Submitted addresses reuse precise local and Photon matches before Census fallback, while preserving ambiguous choices and distinguishing outages from no matches. Coverage diagnostics report imported city counts and recorded provider gaps without exposing addresses or provider IDs. The model continues withholding estimates where too few nearby sales exist.

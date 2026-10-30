@@ -16,7 +16,7 @@ Request logging omits query strings, including searched addresses. Provider stat
 | --- | --- |
 | Browse the map | OpenStreetMap tile service receives tile coordinates and normal browser connection metadata |
 | Type enough address text for suggestions | Photon receives the partial query and Bay Area search bounds; saved sales are also searched locally |
-| Submit a full address | U.S. Census Geocoder receives the submitted address |
+| Submit an address | Saved sales are checked locally; Photon receives the query when needed. If no precise house/street match is found, U.S. Census Geocoder receives the submitted address |
 | Request an API refresh | The selected provider receives its credential and requested search parameters |
 | Open a source sale link | Zillow or Redfin receives a normal browser page visit |
 | Import a CSV | The file is sent to this application; the importer does not forward it to a provider |

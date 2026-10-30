@@ -19,7 +19,7 @@ from urllib.request import Request, urlopen
 
 from model import BAY_BOUNDS, estimate, finite_number, in_bay_area, model_description, prepare_sales, source_provider, today_utc
 from refresh import ImportBusyError, atomic_json
-from address_suggest import AddressSuggestions
+from address_suggest import AddressSuggestions, MAX_QUERY_LENGTH, REQUEST_TIMEOUT, REQUEST_INTERVAL, precise_address_matches
 
 BASE_DIR = Path(__file__).resolve().parent
 PUBLIC_DIR = BASE_DIR / "public"
@@ -130,10 +130,11 @@ class DataStore:
 
 
 class Geocoder:
-    """Submitted street-address searches only, cached; no autocomplete or batch lookup."""
+    """Submitted addresses reuse precise suggestions before Census; no batch lookup."""
     MAX_CACHE_ENTRIES = 512
-    def __init__(self, cache_path: Path):
+    def __init__(self, cache_path: Path, *, suggestions=None):
         self.cache_path = cache_path
+        self.suggestions = suggestions
         self.lock = threading.Lock()
         self.last_request = 0.0
         try:
@@ -159,15 +160,31 @@ class Geocoder:
             raise RuntimeError("Address search is busy. Try again shortly or tap a location on the map.")
         try:
             cached = self.cache.get(key)
+            valid_cache = False
             try:
                 if isinstance(cached, dict) and isinstance(cached.get("results"), list):
                     # Empty searches expire quickly so a provider miss cannot
                     # conceal a valid address for the full positive-cache TTL.
                     ttl = 90 * 86400 if cached["results"] else 300
-                    if 0 <= time.time() - finite_number(cached.get("saved_at")) < ttl:
-                        return {"results": cached["results"], "cached": True, "provider": "U.S. Census Geocoder"}
+                    valid_cache = 0 <= time.time() - finite_number(cached.get("saved_at")) < ttl
+                    if valid_cache and cached["results"]:
+                        return self._response(cached["results"], cached=True)
             except (ValueError, TypeError, OverflowError):
                 pass
+            suggestion_status = 'not_needed'
+            if self.suggestions is not None and 6 <= len(query) <= MAX_QUERY_LENGTH:
+                # Reuse the autocomplete result, including a request already in
+                # flight when Enter was pressed. Only verified numbered street
+                # matches can resolve a home; approximate street points cannot.
+                suggested = self.suggestions.search(query, wait_timeout=REQUEST_TIMEOUT + REQUEST_INTERVAL,
+                                                    precise_only=True)
+                suggestion_status = suggested['remote_status']
+                precise = precise_address_matches(query, suggested['results'])
+                if precise:
+                    providers = ' + '.join(dict.fromkeys(row['source'] for row in precise))
+                    return self._response(precise, cached=suggested['cached'], provider=providers)
+            if valid_cache and suggestion_status not in {'unavailable', 'busy'}:
+                return self._response(cached['results'], cached=True)
             self.cache.pop(key, None)
             # Globally serialize outbound requests, allowing at most one each second.
             wait = 1.05 - (time.monotonic() - self.last_request)
@@ -199,6 +216,10 @@ class Geocoder:
                                         "source": "U.S. Census Geocoder", "precision": "Street address range interpolation"})
                 except (KeyError, TypeError, ValueError):
                     continue
+            if not results and suggestion_status in {'unavailable', 'busy'}:
+                # A Census miss is inconclusive when the other address source
+                # could not be checked. Do not cache an outage as "no match".
+                raise RuntimeError("Address search is temporarily unavailable. Try again shortly, add a city or ZIP code, or tap a location on the map.")
             self.cache[key] = {"saved_at": time.time(), "results": results}
             while len(self.cache) > self.MAX_CACHE_ENTRIES:
                 self.cache.pop(next(iter(self.cache)))
@@ -207,9 +228,15 @@ class Geocoder:
                 atomic_json(self.cache_path, self.cache, private=True)
             except OSError:
                 pass  # A read-only filesystem must not turn a successful search into an error.
-            return {"results": results, "cached": False, "provider": "U.S. Census Geocoder"}
+            return self._response(results, cached=False)
         finally:
             self.lock.release()
+
+    @staticmethod
+    def _response(results, *, cached, provider="U.S. Census Geocoder"):
+        return {"results": results, "cached": cached, "provider": provider,
+                "status": "matched" if results else "no_match",
+                "message": "" if results else "No matching Bay Area street address was found. Add a city or ZIP code, or tap the location on the map."}
 
 
 class UnconfiguredRefresh:
@@ -238,8 +265,8 @@ class AtlasServer(ThreadingHTTPServer):
     def __init__(self, address, *, data_path=None, refresh_manager=None):
         super().__init__(address, AtlasHandler)
         self.store = DataStore(data_path or BASE_DIR / "data" / "sales.json")
-        self.geocoder = Geocoder(BASE_DIR / "data" / "geocode-cache.json")
         self.suggestions = AddressSuggestions(self.store.snapshot)
+        self.geocoder = Geocoder(BASE_DIR / "data" / "geocode-cache.json", suggestions=self.suggestions)
         self.refresh_manager = refresh_manager or create_refresh_manager()
 
 

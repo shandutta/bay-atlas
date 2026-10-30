@@ -19,6 +19,7 @@ from model import BAY_BOUNDS, STREET_SUFFIXES, finite_number, in_bay_area
 
 MIN_QUERY_LENGTH, MAX_QUERY_LENGTH, RESULT_LIMIT = 6, 120, 5
 MAX_CACHE_ENTRIES, CACHE_TTL_SECONDS = 256, 24 * 60 * 60
+NEGATIVE_CACHE_TTL_SECONDS = 5 * 60
 MAX_RESPONSE_BYTES, REQUEST_TIMEOUT, REQUEST_INTERVAL = 500_000, 8, 1.05
 PROVIDER = 'Photon / OpenStreetMap'
 ATTRIBUTION = {'label': '© OpenStreetMap contributors', 'url': 'https://www.openstreetmap.org/copyright'}
@@ -44,6 +45,44 @@ def _words(value):
 
 def _text(value, limit=200):
     return ' '.join(str(value).split())[:limit] if isinstance(value, (str, int)) else ''
+
+
+def precise_address_matches(query, results):
+    """Only reuse complete house-and-street matches for submitted searches.
+
+    A provider can ignore a house number and return the street, or return a
+    nearby numbered property. Neither is evidence for the requested home.
+    Locality qualifiers must also match; an address shared by multiple cities
+    remains multiple results for the caller to present to the user.
+    """
+    tokens = _words(query)
+    found = []
+    for row in results:
+        if not row.get('address_level'):
+            continue
+        street = _words(row.get('street_address', ''))
+        if (len(street) < 2 or not street[0][0].isdigit()
+                or tokens[:len(street)] != street):
+            continue
+        # Match the entire city component, not a subsequence: "San Francisco"
+        # must not resolve to an address in "South San Francisco".
+        parts = row.get('display_name', '').split(',')
+        city = _words(parts[1]) if len(parts) > 1 else []
+        region = _words(' '.join(parts[2:]))
+        qualifiers = tokens[len(street):]
+        if city and qualifiers[:len(city)] == city:
+            qualifiers = qualifiers[len(city):]
+        qualifiers = ['ca' if word == 'california' else word for word in qualifiers]
+        remaining = iter(region)
+        if not all(any(word == item for item in remaining) for word in qualifiers):
+            continue
+        try:
+            if not in_bay_area(finite_number(row.get('lat')), finite_number(row.get('lng'))):
+                continue
+        except (ValueError, TypeError):
+            continue
+        found.append(dict(row))
+    return found
 
 
 def normalize_photon(payload):
@@ -82,7 +121,9 @@ def normalize_photon(payload):
                 continue
             seen.add(identity)
             results.append({'lat': lat, 'lng': lng, 'display_name': display,
-                            'source': PROVIDER, 'precision': precision})
+                            'source': PROVIDER, 'precision': precision,
+                            'address_level': bool(house and street),
+                            'street_address': house + ' ' + street if house and street else ''})
             if len(results) == RESULT_LIMIT:
                 break
         except (ValueError, TypeError, AttributeError):
@@ -106,7 +147,7 @@ class AddressSuggestions:
         self._indexed_sales, self._index = None, []
         self._word_rows, self._sorted_words = {}, []
 
-    def _local(self, query):
+    def _local(self, query, *, precise_only=False):
         sales = self.snapshot().get('sales', [])
         with self._cache_lock:
             if sales is not self._indexed_sales:
@@ -116,8 +157,10 @@ class AddressSuggestions:
                         address = _text(row.get('address'), 300)
                         lat, lng = finite_number(row.get('lat')), finite_number(row.get('lng'))
                         if address and in_bay_area(lat, lng):
+                            street = _text(row.get('street_address'), 300) or address.split(',', 1)[0]
                             index.append((_words(address), {'lat': lat, 'lng': lng, 'display_name': address,
-                                         'source': 'Local sale records', 'precision': 'Saved property location'}))
+                                         'source': 'Local sale records', 'precision': 'Saved property location',
+                                         'address_level': True, 'street_address': street}))
                     except (ValueError, TypeError, AttributeError):
                         continue
                 # Full-word postings avoid rescanning every saved address on
@@ -154,6 +197,8 @@ class AddressSuggestions:
         found.sort(key=lambda entry: entry[:3])
         results, seen = [], set()
         for *_, item in found:
+            if precise_only and not precise_address_matches(query, [item]):
+                continue
             key = tuple(_words(item['display_name']))
             if key not in seen:
                 results.append(dict(item))
@@ -165,7 +210,8 @@ class AddressSuggestions:
     def _cached(self, key):
         with self._cache_lock:
             item = self._cache.get(key)
-            if item and self._clock() - item['at'] < CACHE_TTL_SECONDS:
+            ttl = CACHE_TTL_SECONDS if item and item['results'] else NEGATIVE_CACHE_TTL_SECONDS
+            if item and 0 <= self._clock() - item['at'] < ttl:
                 self._cache.move_to_end(key)
                 return [dict(row) for row in item['results']]
             self._cache.pop(key, None)
@@ -188,19 +234,21 @@ class AddressSuggestions:
             raise ValueError('Address response too large')
         return normalize_photon(json.loads(body))
 
-    def search(self, query):
+    def search(self, query, *, wait_timeout=1.05, precise_only=False):
         query = normalize_query(query)
         key = query.casefold()
-        local = self._local(query)
+        local = self._local(query, precise_only=precise_only)
         base = {'provider': PROVIDER, 'attribution': dict(ATTRIBUTION), 'notice': NOTICE}
-        if len(local) >= RESULT_LIMIT or any(_words(query) == _words(row['display_name']) for row in local):
-            return dict(base, results=local, cached=True, remote_status='not_needed')
+        if ((not precise_only and len(local) >= RESULT_LIMIT)
+                or any(_words(query) == _words(row['display_name']) for row in local)):
+            return dict(base, results=local, cached=True, remote_status='not_needed', status='matched')
         remote = self._cached(key)
         cached, remote_status = remote is not None, 'ok'
         if remote is None:
             # Bounded waiting avoids a queue of stale keystrokes during a slow outage.
-            if not self._request_lock.acquire(timeout=1.05):
-                return dict(base, results=local, cached=False, remote_status='busy', retry_after_ms=1100)
+            if not self._request_lock.acquire(timeout=wait_timeout):
+                return dict(base, results=local, cached=False, remote_status='busy', retry_after_ms=1100,
+                            status='matched' if local else 'busy', message='Address suggestions are busy. Try again shortly.')
             try:
                 remote = self._cached(key)
                 if remote is not None:
@@ -221,6 +269,8 @@ class AddressSuggestions:
                                 self._cache.popitem(last=False)
             finally:
                 self._request_lock.release()
+        if precise_only:
+            remote = precise_address_matches(query, remote)
         results, seen = [], set()
         for item in [*local, *remote]:
             identity = tuple(_words(item['display_name']))
@@ -229,4 +279,8 @@ class AddressSuggestions:
                 seen.add(identity)
                 if len(results) == RESULT_LIMIT:
                     break
-        return dict(base, results=results, cached=cached, remote_status=remote_status)
+        status = 'matched' if results else ('no_match' if remote_status == 'ok' else remote_status)
+        message = ('Address suggestions are temporarily unavailable. Try again shortly or submit a full address.'
+                   if remote_status == 'unavailable' else
+                   'No address suggestions found. Add a city or ZIP code, or submit the full address.' if not results else '')
+        return dict(base, results=results, cached=cached, remote_status=remote_status, status=status, message=message)

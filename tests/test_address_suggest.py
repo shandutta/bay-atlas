@@ -57,6 +57,8 @@ class SuggestionsTests(unittest.TestCase):
         self.assertEqual(row['lat'], 37.8)
         self.assertEqual(row['lng'], -122.25)
         self.assertEqual(row['precision'], 'Mapped street address')
+        self.assertTrue(row['address_level'])
+        self.assertEqual(row['street_address'], '1 Synthetic Civic Plaza')
         self.assertIn('OpenStreetMap', result['attribution']['label'])
         self.assertIn('Photon (komoot)', result['notice'])
 
@@ -95,6 +97,18 @@ class SuggestionsTests(unittest.TestCase):
                 self.service.search('123 Test ' + str(index))
         self.assertEqual(len(self.service._cache), 3)
         self.assertNotIn('123 test 0', self.service._cache)
+
+    def test_empty_suggestions_expire_before_positive_results(self):
+        self.payload = {'features': []}
+        result = self.service.search('100 Example Street')
+        self.assertEqual(result['status'], 'no_match')
+        self.assertIn('city or ZIP', result['message'])
+        self.assertTrue(self.service.search('100 Example Street')['cached'])
+        self.clock.at += subject.NEGATIVE_CACHE_TTL_SECONDS + 1
+        self.payload = {'features': [feature()]}
+        result = self.service.search('100 Example Street')
+        self.assertFalse(result['cached'])
+        self.assertEqual(result['status'], 'matched')
 
     def test_all_outbound_requests_are_spaced_over_one_second(self):
         self.service.search('1 Synthetic Civic')
@@ -137,6 +151,26 @@ class SuggestionsTests(unittest.TestCase):
         self.assertFalse(self.service._local('100 Exa View'))
         self.assertEqual(self.service._local('100 New')[0]['lat'], 37.83)
 
+    def test_submitted_search_filters_before_local_limit_and_checks_remote_ambiguity(self):
+        self.sales = [{'address': f'100 Example {extra}Road, Oakland, CA', 'lat': 37.8, 'lng': -122.25}
+                      for extra in ('', 'Cove ', 'Ridge ', 'View ', 'Vista ')]
+        remote = feature()
+        remote['properties'].update(housenumber='100', street='Example Road', city='Berkeley', postcode='94704')
+        self.payload = {'features': [remote]}
+        result = self.service.search('100 Example Road', precise_only=True)
+        self.assertEqual(len(self.calls), 1, 'submitted lookup must not inherit the autocomplete local-only cutoff')
+        self.assertEqual(len(result['results']), 2)
+        self.assertIn('Oakland', result['results'][0]['display_name'])
+        self.assertIn('Berkeley', result['results'][1]['display_name'])
+
+    def test_submitted_search_does_not_let_loose_matches_hide_an_exact_local_address(self):
+        self.sales = [{'address': f'100 Example {extra}Road, Oakland, CA', 'lat': 37.8, 'lng': -122.25}
+                      for extra in ('Cove ', 'Ridge ', 'View ', 'Vista ', 'Long ', '')]
+        self.payload = {'features': []}
+        result = self.service.search('100 Example Road', precise_only=True)
+        self.assertEqual(len(result['results']), 1)
+        self.assertEqual(result['results'][0]['street_address'], '100 Example Road')
+
     def test_failed_remote_keeps_local_matches_without_echoing_error(self):
         self.sales.append({'address': '100 Example View Drive, Lafayette, CA 94549', 'lat': 37.9, 'lng': -122.1})
         self.fail = True
@@ -146,6 +180,13 @@ class SuggestionsTests(unittest.TestCase):
         self.assertNotIn('private query', json.dumps(result))
         self.assertFalse(self.service._cache)
 
+    def test_failed_remote_without_local_results_reports_unavailable(self):
+        self.fail = True
+        result = self.service.search('100 Example Street')
+        self.assertEqual(result['status'], 'unavailable')
+        self.assertIn('temporarily unavailable', result['message'])
+        self.assertNotIn('private query', json.dumps(result))
+
     def test_non_address_results_are_marked_approximate(self):
         item = feature()
         del item['properties']['housenumber']
@@ -153,6 +194,8 @@ class SuggestionsTests(unittest.TestCase):
         self.payload = {'features': [item]}
         result = self.service.search('Synthetic Civic')
         self.assertIn('Approximate street', result['results'][0]['precision'])
+        self.assertFalse(result['results'][0]['address_level'])
+        self.assertEqual(result['results'][0]['street_address'], '')
 
     def test_malformed_outside_and_nonfinite_results_are_rejected(self):
         outside = feature(geometry={'type': 'Point', 'coordinates': [-73.9, 40.7]})
