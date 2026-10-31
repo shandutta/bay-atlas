@@ -14,7 +14,7 @@ function point(x,y) {
 }
 function harness() {
   const timers = new Map(), handlers = new Map(), layers = new Set(), messages = [], paints = [];
-  const elements = {'map-loading':{hidden:true},'sqft':{value:'2500'},'beds':{value:'3'},'toggle-surface':{disabled:false}};
+  const elements = {'map-loading':{hidden:true},'map-notice':{hidden:true},'map-notice-text':{},'sqft':{value:'2500'},'beds':{value:'3'},'toggle-surface':{disabled:false,setAttribute(key,value) {this[key]=value;}}};
   let nextTimer = 0;
   const drawing = {createImageData:(width,height)=>({data:new Uint8ClampedArray(width*height*4)}),
     putImageData() {},clearRect() {},drawImage(...args) { paints.push(args); }};
@@ -33,14 +33,14 @@ function harness() {
   }
   const worker = {postMessage:message=>messages.push(message)};
   const context = {state:{sales:[{}],surface:true,surfaceFailed:false,renderId:0},surfaceMoving:false,renderTimer:null,
-    canvas,surfaceContext:drawing,worker,map,boundsEast:[[40,-120],[39,-119]],
+    waterMask:{erase:(ctx,origin)=>paints.push({masked:true,origin})},canvas,surfaceContext:drawing,worker,map,boundsEast:[[40,-120],[39,-119]],
     L:{ImageOverlay,DomUtil:{addClass:(element,value)=>element.classes.add(value)}},
     window:{innerWidth:1000},document:{createElement:()=>({getContext:()=>drawing})},
     $:id=>elements[id],color:()=>[90,120,150],showMapNotice:()=>{},
     setTimeout:(callback)=>{timers.set(++nextTimer,callback);return nextTimer;},clearTimeout:id=>timers.delete(id)};
   vm.createContext(context);
   const overlayStart=source.indexOf('  const CanvasOverlay ='),overlayEnd=source.indexOf('  const stops =',overlayStart);
-  const renderStart=source.indexOf('  function scheduleSurface('),renderEnd=source.indexOf('  function showMapNotice(',renderStart);
+  const renderStart=source.indexOf('  function scheduleSurface('),renderEnd=source.indexOf('  function renderSaleDots(',renderStart);
   assert.ok(overlayStart>=0 && overlayEnd>overlayStart && renderStart>=0 && renderEnd>renderStart);
   vm.runInContext(source.slice(overlayStart,overlayEnd)+source.slice(renderStart,renderEnd),context);
   const overlay=vm.runInContext('surfaceOverlay',context);
@@ -84,7 +84,7 @@ test('surface work waits for motion to end, including delayed assumption or resi
   assert.equal(ui.requests().length,2);
   assert.equal(ui.canvas.style.display,'block','Keep the old view visible while its replacement calculates');
   const replacement=ui.requests().at(-1);ui.finish(replacement);
-  assert.equal(ui.paints.length,2);
+  assert.equal(ui.paints.length,4);
   assert.deepEqual(JSON.parse(JSON.stringify(ui.overlay.bounds)),[[40.002,-119.995],[39.918,-119.855]]);
 });
 
@@ -102,4 +102,39 @@ test('completed raster attaches to geographic padded bounds and joins Leaflet zo
   assert.equal(ui.canvas.classes.has('leaflet-zoom-animated'),true);
   assert.equal(ui.overlay.options.pane,'surface');
   assert.equal(ui.canvas.style.display,'block');
+  assert.equal(ui.paints.at(-1).masked,true,'Water is removed after the smoothed raster is drawn');
+  assert.equal(ui.paints.at(-1).origin,request.origin);
+});
+
+test('shading waits for boundaries and does not paint a worker reply without them', () => {
+  const ui=harness();ui.render();const pending=ui.requests().at(-1);
+  ui.context.waterMask=null;
+  ui.finish(pending);
+  assert.equal(ui.paints.length,0);
+  ui.render();
+  assert.equal(ui.requests().length,1);
+  assert.equal(ui.canvas.style.display,'none');
+});
+
+test('a missing boundary asset disables shading and preserves its failure notice', async () => {
+  const ui=harness();ui.context.fetch=async()=>({ok:false});
+  await vm.runInContext('loadWaterMask()',ui.context);
+  vm.runInContext("showMapNotice('Partial snapshot')",ui.context);
+  assert.equal(ui.context.state.maskFailed,true);
+  assert.equal(ui.context.state.surface,false);
+  assert.equal(ui.elements['toggle-surface'].disabled,true);
+  assert.equal(ui.elements['toggle-surface']['aria-pressed'],'false');
+  assert.match(ui.elements['map-notice-text'].textContent,/Shoreline boundaries/);
+  assert.equal(ui.canvas.style.display,'none');
+});
+
+test('a masking error hides the existing canvas and invalidates pending work', () => {
+  const ui=harness();ui.render();ui.finish(ui.requests().at(-1));
+  ui.context.waterMask.erase=()=>{throw new Error('Canvas failure');};
+  ui.render();const pending=ui.requests().at(-1);ui.finish(pending);
+  assert.equal(ui.canvas.style.display,'none');
+  assert.equal(ui.context.state.maskFailed,true);
+  const paints=ui.paints.length;ui.finish(pending);
+  assert.equal(ui.paints.length,paints);
+  assert.equal(ui.messages.at(-1).type,'cancel');
 });

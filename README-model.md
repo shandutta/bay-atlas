@@ -33,6 +33,10 @@ Compute the weighted median of log(price/sqft), then its weighted median absolut
 
 The model does not adjust for renovation, condition, lot size, views, street, school district, financing concessions, or the market's movement since each sale. It can combine nearby homes across neighborhood boundaries. Recency weights are a configurable judgment, not coefficients learned from historical sale predictions. Total estimated price simply multiplies estimated $/sqft by the requested size.
 
+## Shoreline display
+
+The browser removes water from the completed, smoothed price raster with a locally bundled [2025 Census TIGER/Line mask](public/geo/README.md). Islands are preserved using polygon holes, and clipping follows the raster during pan/zoom. Mapped-water taps do not request an estimate; explicit address searches remain available because geocoded points can be approximate. This display mask does not change the comparable-sales model or turn missing sale coverage into evidence.
+
 ## APIs
 
 - `GET /api/data`: eligible sales in one `sales` array, coverage, last successful data timestamp, model details, and exclusion diagnostics. HTTP gzip is supported; internal aliases are not duplicated on the wire.

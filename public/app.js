@@ -7,7 +7,7 @@
   const number = value => countFormat.format(value);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const shortDate = value => { const d = new Date(`${String(value).slice(0,10)}T12:00:00`); return Number.isNaN(+d) ? 'Date unavailable' : d.toLocaleDateString('en-US',{month:'short',year:'numeric'}); };
-  const state = {sales:[],data:null,selected:null,estimateId:0,estimateController:null,renderId:0,surface:true,surfaceFailed:false,showSales:false,refreshTimer:null,providerConfigured:false,importing:false,refreshRunning:false};
+  const state = {sales:[],data:null,selected:null,estimateId:0,estimateController:null,renderId:0,surface:true,surfaceFailed:false,maskFailed:false,showSales:false,refreshTimer:null,providerConfigured:false,importing:false,refreshRunning:false};
   const boundsEast = L.latLngBounds([[37.68,-122.39],[37.97,-121.99]]);
   // Nine-county extent, including northern Sonoma/Napa and southern Santa Clara.
   // U.S. Census 2025 county cartographic boundaries, rounded outward.
@@ -45,7 +45,7 @@
   });
   const surfaceOverlay = new CanvasOverlay('',boundsEast,{pane:'surface',interactive:false});
   const stops = [[89,123,156],[91,155,153],[168,189,134],[223,189,112],[200,120,84]];
-  let marker = null, renderTimer = null, surfaceMoving = false;
+  let marker = null, renderTimer = null, surfaceMoving = false, waterMask = null;
   function fitRegion(bounds) {
     const mobile = window.innerWidth <= 700;
     map.fitBounds(bounds,{paddingTopLeft:mobile ? [12,60] : [385,55],paddingBottomRight:mobile ? [12,$('explorer-panel').getBoundingClientRect().height + 18] : [60,45],animate:false});
@@ -78,7 +78,7 @@
     renderTimer = setTimeout(renderSurface,120);
   }
   function renderSurface() {
-    if (!state.surface || state.surfaceFailed || !state.sales.length) { worker.postMessage({type:'cancel'}); canvas.style.display = 'none'; $('map-loading').hidden = true; return; }
+    if (!state.surface || state.surfaceFailed || !waterMask || !state.sales.length) { worker.postMessage({type:'cancel'}); canvas.style.display = 'none'; $('map-loading').hidden = true; return; }
     if (surfaceMoving) return;
     const size = map.getSize();
     // A modest margin keeps nearby shading available during ordinary drags.
@@ -102,7 +102,7 @@
   worker.onmessage = ({data}) => {
     if (data.id !== state.renderId) return;
     $('map-loading').hidden = true;
-    if (!state.surface) return;
+    if (!state.surface || !waterMask) return;
     const mini = document.createElement('canvas'); mini.width = data.width; mini.height = data.height;
     const ctx = mini.getContext('2d'), img = ctx.createImageData(data.width,data.height);
     for (let i = 0; i < data.values.length / 2; i++) {
@@ -112,6 +112,10 @@
     ctx.putImageData(img,0,0); canvas.width = data.origin.width; canvas.height = data.origin.height;
     surfaceContext.clearRect(0,0,canvas.width,canvas.height); surfaceContext.imageSmoothingEnabled = true; surfaceContext.imageSmoothingQuality = 'high';
     surfaceContext.drawImage(mini,-data.origin.step / 2,-data.origin.step / 2,data.width * data.origin.step,data.height * data.origin.step);
+    // Mask the full-resolution raster AFTER smoothing. Masking only sample
+    // points would let bilinear interpolation bleed colors back over the shore.
+    try { waterMask.erase(surfaceContext,data.origin); }
+    catch { pauseForWaterMask(); return; }
     surfaceOverlay.setBounds(data.origin.bounds);
     if (!map.hasLayer(surfaceOverlay)) surfaceOverlay.addTo(map);
     canvas.style.display = 'block';
@@ -124,7 +128,29 @@
   map.on('movestart',() => { surfaceMoving = true; clearTimeout(renderTimer); ++state.renderId; worker.postMessage({type:'cancel'}); $('map-loading').hidden = true; });
   map.on('moveend',() => { surfaceMoving = false; scheduleSurface(); });
   map.on('resize',scheduleSurface);
-  function showMapNotice(message) { $('map-notice-text').textContent = message; $('map-notice').hidden = !message; }
+  function showMapNotice(message) {
+    if (state.maskFailed) message = 'Shoreline boundaries could not load. Shading is paused; address estimates remain available. Reload to retry.';
+    else if (state.surfaceFailed) message = 'The price surface could not load. Address estimates are still available. Reload to retry shading.';
+    $('map-notice-text').textContent = message; $('map-notice').hidden = !message;
+  }
+  function pauseForWaterMask() {
+    state.maskFailed = true; state.surface = false; canvas.style.display = 'none';
+    ++state.renderId; clearTimeout(renderTimer); worker.postMessage({type:'cancel'});
+    $('toggle-surface').disabled = true; $('toggle-surface').setAttribute('aria-pressed','false');
+    $('map-loading').hidden = true; showMapNotice('');
+  }
+  async function loadWaterMask() {
+    try {
+      const response = await fetch('geo/bay-water.json');
+      if (!response.ok) throw new Error('Water boundary request failed');
+      waterMask = BayWaterMask.create(await response.json());
+      if (state.selected?.mapTap && waterMask.isWater(state.selected.lat,state.selected.lng)) fetchEstimate();
+      map.attributionControl.addAttribution('Water: <a href="https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html" target="_blank" rel="noopener">U.S. Census Bureau (2025)</a>');
+      scheduleSurface();
+    } catch {
+      pauseForWaterMask();
+    }
+  }
   function renderSaleDots() {
     salesLayer.clearLayers();
     if (!state.showSales) return;
@@ -204,7 +230,7 @@
     marker?.unbindTooltip();
   }
   async function selectLocation(lat,lng,label,move=true) {
-    state.selected = {lat:Number(lat),lng:Number(lng),label:label || `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}`};
+    state.selected = {lat:Number(lat),lng:Number(lng),label:label || `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}`,mapTap:!move};
     if (marker) { clearEstimateTooltip(); map.removeLayer(marker); }
     marker = L.marker([lat,lng],{icon:L.divIcon({className:'',html:'<span class="selected-marker"></span>',iconSize:[28,28],iconAnchor:[14,14]}),keyboard:true,title:state.selected.label}).addTo(map);
     if (window.innerWidth <= 700) panelControls.setExpanded(true);
@@ -252,6 +278,12 @@
   }
   async function fetchEstimate() {
     if (!state.selected) return;
+    if (state.selected.mapTap && waterMask?.isWater(state.selected.lat,state.selected.lng)) {
+      ++state.estimateId; state.estimateController?.abort(); clearEstimateTooltip();
+      $('estimate-section').hidden = false;
+      $('estimate-section').innerHTML = '<div class="estimate-empty"><h3>This point is on mapped water.</h3><p>Choose a point on land or search for a street address to estimate a home.</p></div>';
+      return;
+    }
     const request = ++state.estimateId;
     state.estimateController?.abort(); state.estimateController = new AbortController();
     $('estimate-section').hidden = false;
@@ -607,6 +639,7 @@
     schedule();
   }
   installMapResize(map,$('map'));
+  loadWaterMask();
   loadData();
   api('refresh').then(applyRefresh).catch(() => {});
   // Reload local data only. New provider requests require the explicit refresh button.

@@ -6,7 +6,7 @@ The application is deliberately small: standard-library Python, plain JavaScript
 
 - Python tests cover eligibility, dated sold-price extraction, deduplication, estimates, provider budgets, interrupted runs, imports, HTTP validation, caching, and geocoding failures.
 - JavaScript tests cover keyboard suggestions, mobile sheet dragging, stale-response cancellation, provider controls, refresh monitoring, and worker parity with the Python model.
-- CI runs on Linux with Python 3.9 and 3.13 and on macOS with Python 3.13, using Node.js 22. All tests use synthetic inputs and fake provider clients.
+- CI runs on Linux with Python 3.9 and 3.13 and on macOS with Python 3.13, using Node.js 22. Tests use synthetic sales and fake provider clients; shoreline checks also use bundled public geographic boundaries.
 - Manual Chromium review covers 1440 × 900 and 1024 × 768 desktops and a 390 × 844 mobile viewport: search with arrow keys/Enter, subject controls, map navigation, sale markers, source/data dialogs, Escape dismissal, empty data, and dragging the result sheet after an estimate.
 - A publication guard checks for private files and recognizable secrets. Full staged content and fresh Git history are also reviewed before initial publication.
 
@@ -46,3 +46,11 @@ This review is not a formal screen-reader or WCAG conformance audit. Native touc
 An independent interaction review led to three mobile drawer snap positions, a persistent tap control, native content scrolling, keyboard snap controls, and shared map-overlay geometry. Search and map selection now keep the selected marker above the expanded drawer. Manual minimization cancels a pending address lookup, and manual content interaction prevents late estimate scrolling. Reduced-motion settings cover map movement and pinch release; tile fades are disabled. See [the interaction review](INTERACTION_REVIEW.md) for the findings and browser evidence.
 
 Submitted addresses reuse precise local and Photon matches before Census fallback, while preserving ambiguous choices and distinguishing outages from no matches. Coverage diagnostics report imported city counts and recorded provider gaps without exposing addresses or provider IDs. The model continues withholding estimates where too few nearby sales exist.
+
+## Shoreline rendering
+
+The final smoothed price raster is clipped with bundled 2025 Census TIGER/Line water polygons, using the same Web Mercator bounds as its Leaflet overlay. This preserves islands and keeps the clipped shoreline attached during pan and pinch gestures. Shading waits for the boundaries and stays disabled if they fail to load or draw; address search remains available. Tapping mapped water withholds a home estimate. The mask is static public geography, not additional property data, and does not change comparable-sale weights or claim to fix missing sales.
+
+Static text/JSON assets now support cached gzip encoding, conditional requests, and HEAD responses. The 3.7 MB boundary asset transfers as about 1.17 MB gzip. Automated tests cover geographic island/water samples, Mercator alignment, overlapping water polygons, render scheduling, failure handling, and gzip negotiation/cache invalidation.
+
+Chromium verification at 1200 × 839 and 393 × 760 confirmed clear Bay water and shaded land/islands. Held touch drag and pinch retained the clipped raster; a water tap and a subsequent bedroom change both kept the explicit water message. The browser reported no console errors. These are emulated touch checks, not physical iPhone verification.

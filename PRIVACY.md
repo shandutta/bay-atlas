@@ -1,6 +1,6 @@
 # Privacy and publication boundaries
 
-The public repository contains code, documentation, third-party notices, and synthetic tests. It excludes imported property records, search history, provider credentials, usage ledgers, invoices, screenshots, private deployment details, and historical commits from any private installation.
+The public repository contains code, documentation, third-party notices, synthetic sale tests, and public Census geographic boundaries. It excludes imported property records, search history, provider credentials, usage ledgers, invoices, screenshots, private deployment details, and historical commits from any private installation.
 
 ## Local state
 
@@ -21,7 +21,7 @@ Request logging omits query strings, including searched addresses. Provider stat
 | Open a source sale link | Zillow or Redfin receives a normal browser page visit |
 | Import a CSV | The file is sent to this application; the importer does not forward it to a provider |
 
-Leaflet and fonts are served locally. There is no analytics integration. Public geocoding and tile services have their own terms and privacy policies.
+Leaflet, fonts, and the bundled Census shoreline mask are served locally; the mask requires no external browser request. There is no analytics integration. Public geocoding and tile services have their own terms and privacy policies.
 
 ## Before publishing a fork
 

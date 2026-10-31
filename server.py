@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+from functools import lru_cache
 import gzip
 import importlib
 import json
@@ -27,6 +28,12 @@ MAX_JSON_BYTES = 16_384
 MAX_IMPORT_BYTES = 5 * 1024 * 1024
 ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"}
 ALLOWED_HOSTS.update(host.strip().lower() for host in os.environ.get("HOMES_ALLOWED_HOSTS", "").split(",") if host.strip())
+
+
+@lru_cache(maxsize=8)
+def compressed_static(path: str, modified_ns: int, size: int) -> bytes:
+    """Bounded gzip cache, invalidated by each static asset's file signature."""
+    return gzip.compress(Path(path).read_bytes(), compresslevel=3, mtime=0)
 
 
 class DataStore:
@@ -479,17 +486,23 @@ class AtlasHandler(BaseHTTPRequestHandler):
         if etag in [value.strip() for value in self.headers.get("If-None-Match", "").split(",")]:
             self.send_response(304)
             self.send_header("ETag", etag)
+            self.send_header("Vary", "Accept-Encoding")
             self.send_header("Cache-Control", "no-cache")
             self._security_headers()
             self.end_headers()
             return
-        body = target.read_bytes()
         content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
         if content_type.startswith("text/") or content_type in ("application/javascript", "application/json"):
             content_type += "; charset=utf-8"
+        compressed = stat.st_size >= 1024 and self._accepts_gzip() and (
+            content_type.startswith("text/") or content_type.startswith(("application/javascript", "application/json")))
+        body = compressed_static(str(target), stat.st_mtime_ns, stat.st_size) if compressed else target.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "no-cache")
+        self.send_header("Vary", "Accept-Encoding")
+        if compressed:
+            self.send_header("Content-Encoding", "gzip")
         self.send_header("ETag", etag)
         self.send_header("Content-Length", str(len(body)))
         self._security_headers()

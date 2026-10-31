@@ -99,7 +99,7 @@ test('keyboard snaps work and content gestures preserve native scrolling while c
 test('an estimate arriving after manual collapse cannot reopen the mobile panel', async () => {
   const {panel,controls} = dragHarness(false), elements = {'explorer-panel':panel,'welcome-state':new Element(),'estimate-section':new Element()};
   let finishEstimate, scrolled=false;
-  const context={state:{selected:null},marker:null,Number,window:{innerWidth:390,matchMedia:()=>({matches:false})},panelControls:controls,
+  const context={state:{selected:null},marker:null,waterMask:null,Number,window:{innerWidth:390,matchMedia:()=>({matches:false})},panelControls:controls,
     $:id=>elements[id],fetchEstimate:()=>new Promise(resolve=>{finishEstimate=resolve;}),
     L:{divIcon:()=>({}),marker:()=>({addTo(){return this;}})},map:{getZoom:()=>14,project:()=>({add(){return this;}}),getSize:()=>({y:800}),unproject:x=>x,setView(){}},
     requestAnimationFrame:()=>{scrolled=true;},document:{querySelector:()=>({})}};
@@ -175,7 +175,7 @@ test('editing an address aborts the old full-address request and ignores its lat
 
 test('changing a selected location cancels the old estimate and cannot display stale values', async () => {
   const requests=[], rendered=[], elements={'estimate-section':new Element(),'sqft':{value:'2500'},'beds':{value:'3'}};
-  const context={state:{selected:{lat:37.82,lng:-122.25},estimateId:0},marker:null,AbortController,URLSearchParams,
+  const context={state:{selected:{lat:37.82,lng:-122.25},estimateId:0},waterMask:null,marker:null,AbortController,URLSearchParams,
     $:id=>elements[id],clearEstimateTooltip:()=>{},esc:String,renderEstimate:data=>rendered.push(data),
     api:(url,options)=>new Promise(resolve=>requests.push({url,options,resolve}))};
   const from=source.indexOf('  async function fetchEstimate('),to=source.indexOf('\n  function installAddressSearch',from);
@@ -243,4 +243,15 @@ test('a horizontal handle swipe cannot become an accidental collapse tap', async
   await ui.handle.emit('pointerup',{pointerId:1,clientX:200,clientY:104});
   await ui.handle.emit('click');
   assert.equal(ui.panel.style.height,'344px');
+});
+
+test('water map selections remain unavailable after assumption changes or data refresh', async () => {
+  const element=new Element(); let calls=0,aborted=0;
+  const context={state:{selected:{lat:37.8,lng:-122.4,mapTap:true},estimateId:0,estimateController:{abort(){++aborted;}}},
+    waterMask:{isWater:()=>true},clearEstimateTooltip(){},$:()=>element,api(){++calls;}};
+  const from=source.indexOf('  async function fetchEstimate('),to=source.indexOf('\n  function installAddressSearch',from);
+  vm.createContext(context);const fetchEstimate=vm.runInContext(`${source.slice(from,to)}\nfetchEstimate`,context);
+  await fetchEstimate(); await fetchEstimate();
+  assert.equal(calls,0);assert.equal(aborted,2);assert.equal(element.hidden,false);
+  assert.ok(element.html.includes('This point is on mapped water.'));
 });

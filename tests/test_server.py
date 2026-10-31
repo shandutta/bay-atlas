@@ -185,6 +185,49 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(payload["status"], "data_error")
         self.assertEqual(payload["sales"], [])
 
+    def test_static_gzip_negotiation_head_revalidation_and_changed_file(self):
+        root = Path(self.temp.name) / "static-gzip"
+        root.mkdir(exist_ok=True)
+        asset = root / "boundary.json"
+        original = json.dumps({"coordinates": [1, 2, 3] * 1000}).encode()
+        asset.write_bytes(original)
+
+        def fetch(method="GET", encoding="gzip", etag=None):
+            headers = {"Accept-Encoding": encoding}
+            if etag:
+                headers["If-None-Match"] = etag
+            conn = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
+            conn.request(method, "/boundary.json", headers=headers)
+            response = conn.getresponse()
+            result = response.status, dict(response.getheaders()), response.read()
+            conn.close()
+            return result
+
+        with patch("server.PUBLIC_DIR", root):
+            status, headers, compressed = fetch()
+            self.assertEqual(status, 200)
+            self.assertEqual(headers["Content-Encoding"], "gzip")
+            self.assertEqual(headers["Vary"], "Accept-Encoding")
+            self.assertEqual(gzip.decompress(compressed), original)
+            self.assertLess(len(compressed), len(original))
+            with patch("server.gzip.compress", side_effect=AssertionError("Reuse compressed static bytes")):
+                _, head, body = fetch("HEAD")
+                self.assertEqual(body, b"")
+                self.assertEqual(int(head["Content-Length"]), len(compressed))
+            _, plain_headers, plain = fetch(encoding="gzip;q=0, *;q=1")
+            self.assertNotIn("Content-Encoding", plain_headers)
+            self.assertEqual(plain, original)
+            status, revalidated, body = fetch(etag=headers["ETag"])
+            self.assertEqual(status, 304)
+            self.assertEqual(revalidated["Vary"], "Accept-Encoding")
+            self.assertEqual(body, b"")
+            changed = original + b" "
+            asset.write_bytes(changed)
+            status, updated, body = fetch(etag=headers["ETag"])
+            self.assertEqual(status, 200)
+            self.assertNotEqual(updated["ETag"], headers["ETag"])
+            self.assertEqual(gzip.decompress(body), changed)
+
     def test_nonobject_saved_json_is_a_data_error_not_a_server_crash(self):
         path = Path(self.temp.name) / "invalid-schema.json"
         for invalid in ([], None, 123, "text"):
