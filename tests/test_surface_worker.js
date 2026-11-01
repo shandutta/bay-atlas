@@ -165,13 +165,52 @@ test('unsupported world nodes fade to transparent without inventing a price', as
 });
 
 
-test('coarse interpolation never bridges missing evidence using one valid corner', () => {
+test('a supported point uses its exact price when only one grid corner has evidence', () => {
   const worker=harness();
-  worker.evaluate('evidenceAt = () => ({effective:12})');
+  worker.evaluate('let localQueries = 0; evidenceAt = () => { localQueries++; return {items:Array.from({length:3},()=>({value:Math.log(900),weight:1})),total:3,effective:3}; }');
   worker.evaluate('estimate = (lat,lng) => lat < 37.82 && lng < -122.25 ? [800,1] : null');
-  for (const spacing of [250,500,2000,4000]) {
-    assert.equal(worker.evaluate(`surfaceEstimate(37.82,-122.25,2500,3,${spacing})`),null);
+  for (const spacing of [250,500]) {
+    const result=worker.evaluate(`surfaceEstimate(37.82,-122.25,2500,3,${spacing})`);
+    assert.ok(Math.abs(result[0]-900)<1e-9,'Fallback must use local evidence, not the distant corner price');
+    assert.ok(Math.abs(result[1]-.34)<1e-12,'Fallback opacity comes from actual-point support');
   }
+  assert.equal(worker.evaluate('localQueries'),2,'Reuse local evidence without a second neighborhood query');
+});
+
+test('overview samples above 500 m use exact local prices without grid-corner lookups', () => {
+  const worker=harness();
+  worker.evaluate('let localQueries = 0; evidenceAt = () => { localQueries++; return {items:Array.from({length:3},()=>({value:Math.log(900),weight:1})),total:3,effective:3}; }');
+  worker.evaluate('estimate = () => { throw new Error("Overview must not query grid corners"); }');
+  for (const spacing of [501,1000,2000,4000]) {
+    const result=worker.evaluate(`surfaceEstimate(37.82,-122.25,2500,3,${spacing})`);
+    assert.ok(Math.abs(result[0]-900)<1e-9);
+    assert.ok(Math.abs(result[1]-.34)<1e-12);
+  }
+  assert.equal(worker.evaluate('localQueries'),4,'Each overview sample collects local evidence exactly once');
+  assert.equal(worker.evaluate('gridCache.size'),0,'No coarse node prices enter the cache');
+});
+
+test('a small supported neighborhood remains visible on a 4000 m grid', async () => {
+  const worker=harness(), rad=Math.PI/180, radius=6378137, spacing=4000;
+  const step=spacing/Math.cos(37.8*rad);
+  const left=Math.floor(radius*(-122.25)*rad/step);
+  const bottom=Math.floor(radius*Math.log(Math.tan(Math.PI/4+37.82*rad/2))/step);
+  const unproject=(x,y)=>[(2*Math.atan(Math.exp(y*step/radius))-Math.PI/2)/rad,x*step/radius/rad];
+  const center=unproject(left+.2,bottom+.2);
+  const rows=sales().map((row,i)=>({...row,lat:center[0]+i*.00001,lng:center[1]}));
+  await worker.send({...metadata,packed:packed(rows)});
+  worker.evaluate('prepareSubject(2500,3)');
+  const exact=worker.evaluate(`estimate(${center[0]},${center[1]},2500,3)`);
+  let unsupportedCorners=0;
+  for(let j=0;j<=1;j++)for(let i=0;i<=1;i++) {
+    const [lat,lng]=unproject(left+i,bottom+j);
+    if (!worker.evaluate(`estimate(${lat},${lng},2500,3)`)) unsupportedCorners++;
+  }
+  assert.ok(unsupportedCorners>0,'The coarse cell must contain an unsupported corner');
+  await worker.send({...render(1,[center]),gridSpacingMeters:spacing});
+  assert.ok(exact);
+  assert.equal(worker.output[0].values[0],800);
+  assert.ok(Math.abs(worker.output[0].values[1]-exact[1])<1e-6);
 });
 
 test('four supported corners cannot shade an unsupported center', async () => {

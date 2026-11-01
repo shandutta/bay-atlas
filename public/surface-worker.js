@@ -60,8 +60,7 @@ function evidenceAt(lat, lng) {
   return {items,total,effective};
 }
 function supportOpacity(effective) { return Math.min(1, .24 + (effective - 2) / 10); }
-function estimate(lat, lng, sqft, beds) {
-  const evidence = evidenceAt(lat,lng);
+function estimateEvidence(evidence) {
   if (!evidence) return null;
   const {items,total,effective} = evidence;
   const median = quantile(items, .5), mad = quantile(items.map(a => ({value: Math.abs(a.value - median), weight:a.weight})), .5);
@@ -69,6 +68,9 @@ function estimate(lat, lng, sqft, beds) {
   const value = Math.exp(items.reduce((s, a) => s + Math.max(median - clamp, Math.min(median + clamp, a.value)) * a.weight, 0) / total);
   // Opacity shows support continuously while hue carries the scalar price.
   return [value, supportOpacity(effective)];
+}
+function estimate(lat, lng, sqft, beds) {
+  return estimateEvidence(evidenceAt(lat,lng));
 }
 // Bilinear interpolation between world-anchored samples. A 250 m nominal
 // spacing is 246–253 m on the ground across the Bay Area. It is a rendering
@@ -80,6 +82,9 @@ function surfaceEstimate(lat, lng, sqft, beds, spacing) {
   // This skips the price sorting/refit, so cached grid estimates remain useful.
   const localEvidence = evidenceAt(lat,lng);
   if (!localEvidence) return null;
+  // Widely spaced nodes can average across different neighborhoods. Overview
+  // samples use the exact local fit; the screen raster sets their density.
+  if (spacing > 500) return estimateEvidence(localEvidence);
   const step = spacing / referenceCosine;
   const x = projectionRadius * lng * radians / step;
   const y = projectionRadius * Math.log(Math.tan(Math.PI / 4 + lat * radians / 2)) / step;
@@ -99,9 +104,11 @@ function surfaceEstimate(lat, lng, sqft, beds, spacing) {
       if (gridCache.size >= 24000) gridCache.clear();
       gridCache.set(cacheKey, value);
     }
-    // Do not interpolate across missing evidence: a coarse zoom grid must
-    // never bridge an unsupported neighborhood using a single distant node.
-    if (!value) return null;
+    // A supported neighborhood may sit between widely spaced coarse nodes.
+    // If any corner lacks evidence, use this point's own comparables instead
+    // of either hiding the neighborhood or borrowing a lone distant color.
+    // Reuse the mandatory local support check rather than querying it again.
+    if (!value) return estimateEvidence(localEvidence);
     const w = fraction * value[1]; weightedValue += value[0] * w; support += w;
   }
   return support > 0 ? [weightedValue / support, Math.min(support,supportOpacity(localEvidence.effective))] : null;
