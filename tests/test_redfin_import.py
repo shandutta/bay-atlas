@@ -7,11 +7,13 @@ import tempfile
 import threading
 import unittest
 from unittest.mock import patch
+import hashlib
 
 from model import merge_sales, prepare_sales
 from refresh import ImportBusyError, RefreshManager
 from server import AtlasServer, DataStore, MAX_IMPORT_BYTES
 from test_redfin_csv import csv_bytes, home, parse
+from redfin_csv import URL_HEADER
 
 TODAY = date(2026, 10, 29)
 
@@ -92,6 +94,60 @@ class ImportTests(unittest.TestCase):
 
     def payload(self, rows=None):
         return {'csv': csv_bytes(rows if rows is not None else [home()]).decode(), 'filename': '/private/downloads/export.csv'}
+
+    def retained_exclusion(self, **changes):
+        row = dict(zillow(), reason='explicit_attached_home',
+                   attachment_evidence='Zillow resoFacts.hasAttachedProperty true')
+        row.update(changes)
+        return row
+
+    def test_known_attached_cross_provider_home_is_excluded_with_raw_provenance_preserved(self):
+        prior = json.loads(self.path.read_text())
+        evidence = self.retained_exclusion()
+        prior['excluded_attached_properties'] = [evidence]
+        self.path.write_text(json.dumps(prior))
+        good = home(**{'ADDRESS': '200 Different St', URL_HEADER:
+                       'https://www.redfin.com/CA/Berkeley/200-Different-St-94707/home/5678'})
+        payload = self.payload([home(), good])
+        result = self.manager.import_redfin(payload)
+        self.assertEqual(result['counts']['added'], 1)
+        self.assertEqual(result['counts']['excluded_attached'], 1)
+        saved = json.loads(self.path.read_text())
+        self.assertEqual(saved['excluded_attached_properties'], [evidence])
+        self.assertEqual(saved['last_import']['export_sha256'], hashlib.sha256(payload['csv'].encode()).hexdigest())
+        self.assertNotIn('redfin:1234', {row['id'] for row in saved['sales']})
+        self.assertIn('redfin:5678', {row['id'] for row in saved['sales']})
+
+    def test_attached_suffix_matching_does_not_exclude_distinct_nearby_homes(self):
+        prior = json.loads(self.path.read_text())
+        prior['excluded_attached_properties'] = [self.retained_exclusion()]
+        self.path.write_text(json.dumps(prior))
+        rows = [home(**{'ADDRESS': '100 Example'}),
+                home(**{'ADDRESS': '100 Example Road', URL_HEADER:
+                         'https://www.redfin.com/CA/Berkeley/100-Example-Rd-94707/home/5678'}),
+                home(**{'ADDRESS': '102 Example St', URL_HEADER:
+                         'https://www.redfin.com/CA/Berkeley/102-Example-St-94707/home/9012'})]
+        result = self.manager.import_redfin(self.payload(rows))
+        self.assertEqual(result['counts']['excluded_attached'], 1)
+        self.assertEqual(result['counts']['added'], 2)
+
+    def test_only_known_attached_import_preserves_exact_prior_bytes(self):
+        prior = json.loads(self.path.read_text())
+        prior['excluded_attached_properties'] = [self.retained_exclusion()]
+        self.path.write_text(json.dumps(prior))
+        before = self.path.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'known to be attached'):
+            self.manager.import_redfin(self.payload())
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertFalse(self.manager.operation_lock.locked())
+
+    def test_unverified_exclusion_cannot_remove_a_home(self):
+        prior = json.loads(self.path.read_text())
+        prior['excluded_attached_properties'] = [self.retained_exclusion(attachment_evidence='unverified')]
+        self.path.write_text(json.dumps(prior))
+        result = self.manager.import_redfin(self.payload())
+        self.assertEqual(result['counts']['excluded_attached'], 0)
+        self.assertEqual(result['counts']['added'], 1)
 
     def test_success_publishes_mixed_source_provenance_and_safe_counts(self):
         prior = json.loads(self.path.read_text())

@@ -84,10 +84,12 @@
     // A modest margin keeps nearby shading available during ordinary drags.
     // Newly exposed territory beyond it is calculated when movement settles.
     const padding = size.multiplyBy(.2).ceil(), rasterSize = size.add(padding.multiplyBy(2));
-    // Every low-resolution pixel is an independently estimated scalar sample.
-    // Browser bilinear interpolation makes the visible color field continuous.
+    // Scalar samples interpolate a fixed 250 m world grid in the worker.
+    // Browser smoothing is display-only; zooming never invents finer evidence.
     const baseStep = window.innerWidth <= 700 ? 11 : 14;
     const centerPoint = size.divideBy(2), metersPerPixel = map.distance(map.containerPointToLatLng(centerPoint), map.containerPointToLatLng(centerPoint.add([1,0])));
+    // Coarser whole-Bay views use nested grid levels to bound computation.
+    const gridSpacingMeters = 250 * 2 ** Math.max(0, Math.ceil(Math.log2(metersPerPixel * 3 / 250)));
     const step = Math.max(3, Math.ceil(Math.sqrt(rasterSize.x * rasterSize.y / 60000)), Math.min(baseStep, Math.floor(700 / metersPerPixel)));
     const width = Math.ceil(rasterSize.x / step) + 1, height = Math.ceil(rasterSize.y / step) + 1, points = new Float64Array(width * height * 2);
     for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
@@ -97,7 +99,7 @@
     const northWest = map.containerPointToLatLng(padding.multiplyBy(-1));
     const southEast = map.containerPointToLatLng(size.add(padding));
     $('map-loading').hidden = false;
-    worker.postMessage({type:'render',id:++state.renderId,points,width,height,origin:{bounds:[[northWest.lat,northWest.lng],[southEast.lat,southEast.lng]],width:rasterSize.x,height:rasterSize.y,step},sqft:Number($('sqft').value),beds:Number($('beds').value)},[points.buffer]);
+    worker.postMessage({type:'render',id:++state.renderId,points,width,height,gridSpacingMeters,origin:{bounds:[[northWest.lat,northWest.lng],[southEast.lat,southEast.lng]],width:rasterSize.x,height:rasterSize.y,step},sqft:Number($('sqft').value),beds:Number($('beds').value)},[points.buffer]);
   }
   worker.onmessage = ({data}) => {
     if (data.id !== state.renderId) return;
@@ -107,7 +109,7 @@
     const ctx = mini.getContext('2d'), img = ctx.createImageData(data.width,data.height);
     for (let i = 0; i < data.values.length / 2; i++) {
       const value = data.values[i * 2], support = data.values[i * 2 + 1]; if (!value) continue;
-      const rgb = color(value); img.data[i * 4] = rgb[0]; img.data[i * 4 + 1] = rgb[1]; img.data[i * 4 + 2] = rgb[2]; img.data[i * 4 + 3] = Math.round(255 * (.25 + .4 * Math.max(0, (support - .24) / .76)));
+      const rgb = color(value); img.data[i * 4] = rgb[0]; img.data[i * 4 + 1] = rgb[1]; img.data[i * 4 + 2] = rgb[2]; img.data[i * 4 + 3] = Math.round(255 * (support < .24 ? .25 * support / .24 : .25 + .4 * (support - .24) / .76));
     }
     ctx.putImageData(img,0,0); canvas.width = data.origin.width; canvas.height = data.origin.height;
     surfaceContext.clearRect(0,0,canvas.width,canvas.height); surfaceContext.imageSmoothingEnabled = true; surfaceContext.imageSmoothingQuality = 'high';
@@ -177,7 +179,7 @@
     $('updated-at').textContent = updated ? `Data updated ${new Date(updated).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}` : 'No data refresh completed yet';
     const warnings = Array.isArray(meta.warnings) ? meta.warnings.join(' ') : '';
     const gaps = (meta.coverage?.verified_source_gaps || []).filter(g => Number(g.unreachable_count) > 0);
-    const gapSummary = gaps.map(g => `${g.county}: ${number(g.unreachable_count)} listings could not be retrieved`).join('; ');
+    const gapSummary = gaps.map(g => `${g.county}: the original search omitted ${number(g.unreachable_count)} listings`).join('; ');
     const message = meta.message || warnings;
     const sources = [...new Set(state.sales.map(s => saleSource(s.source_url)?.label).filter(Boolean))];
     const hasRedfin = sources.includes('Redfin');
@@ -189,11 +191,11 @@
       showMapNotice('The map is ready. Add dated sales to see price shading.');
     } else {
       $('data-notice').hidden = !partial && !hasRedfin;
-      $('data-notice').textContent = `${partial ? 'Partial sale coverage. ' : ''}${gapSummary ? `${gapSummary}. Blank areas need additional sales data. ` : ''}${meta.coverage?.refresh_mode === 'automatic_api' ? `${meta.coverage.counties_completed || 0}/9 county searches finished. Finished searches can still have missing records. View source details for known gaps; Update data shows available import options.` : hasRedfin ? 'Use Update data for the Zillow API connection or to import a newer Redfin CSV.' : 'Use Update data to add recent sales or manage the data connection.'}`;
+      $('data-notice').textContent = `${partial ? 'Partial sale coverage. ' : ''}${gapSummary ? `${gapSummary}. Later imports may recover some of those sales. ` : ''}${meta.coverage?.refresh_mode === 'automatic_api' ? `${meta.coverage.counties_completed || 0}/9 county searches finished. Finished searches can still have missing records. View source details for known gaps; Update data shows available import options.` : hasRedfin ? 'Use Update data for the Zillow API connection or to import a newer Redfin CSV.' : 'Use Update data to add recent sales or manage the data connection.'}`;
       showMapNotice(partial ? `Partial snapshot · ${number(state.sales.length)} eligible sales.` : '');
     }
     const coverage = typeof meta.coverage === 'string' ? meta.coverage : (meta.coverage?.description || meta.coverage?.label || 'Coverage is limited to imported sales.');
-    $('source-detail').textContent = `Source: ${typeof meta.source === 'string' ? meta.source : `${sources.join(' and ') || 'Imported'} sold-home records`}. ${coverage} ${number(state.sales.length)} eligible homes loaded. ${gapSummary ? `Known source gaps: ${gapSummary}.` : ''} ${updated ? `Last updated ${new Date(updated).toLocaleString()}.` : 'No successful data refresh yet.'} ${warnings}`;
+    $('source-detail').textContent = `Source: ${typeof meta.source === 'string' ? meta.source : `${sources.join(' and ') || 'Imported'} sold-home records`}. ${coverage} ${number(state.sales.length)} eligible homes loaded. ${gapSummary ? `Original source gaps: ${gapSummary}; later imports may recover some records.` : ''} ${updated ? `Last updated ${new Date(updated).toLocaleString()}.` : 'No successful data refresh yet.'} ${warnings}`;
     if (data.model?.time_buckets) {
       const buckets = data.model.time_buckets;
       $('method-weights').innerHTML = buckets.map(b => `<span>${esc(b.label)}<strong>${Number(b.weight).toFixed(2)}×</strong></span>`).join('');

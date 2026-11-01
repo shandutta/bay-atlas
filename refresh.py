@@ -18,7 +18,8 @@ from datetime import datetime, timezone, date
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from model import merge_sales, prepare_sales, source_provider, two_year_cutoff, today_utc
+from model import (canonical_address, merge_sales, prepare_sales, same_property,
+                   source_identity, source_provider, two_year_cutoff, today_utc)
 
 HOST = 'zillow-full-data-api.p.rapidapi.com'
 PRICING_URL = 'https://rapidapi.com/bachhungcong/api/zillow-full-data-api/pricing'
@@ -64,6 +65,30 @@ def atomic_json(path, value, private=False):
         os.replace(temp, path)
     finally:
         temp.unlink(missing_ok=True)
+
+
+def _exclude_retained_attached(rows, exclusions):
+    """Match explicit evidence across providers without excluding nearby homes.
+
+    Index normalized identities/addresses first, then apply the shared property
+    matcher. Missing street suffixes still require locations within 25 meters;
+    different explicit suffixes or nearby but distinct houses remain separate.
+    """
+    indexes = ({}, {}, {})
+    def keys(row):
+        return source_identity(row), canonical_address(row), canonical_address(row, omit_suffix=True)
+    for index, evidence in enumerate(exclusions):
+        for lookup, key in zip(indexes, keys(evidence)):
+            lookup.setdefault(key, set()).add(index)
+    retained = []
+    for row in rows:
+        if not isinstance(row, dict):
+            retained.append(row)
+            continue
+        candidates = set().union(*(lookup.get(key, set()) for lookup, key in zip(indexes, keys(row))))
+        if not any(same_property(row, exclusions[index]) for index in candidates):
+            retained.append(row)
+    return retained
 
 def number(value):
     try:
@@ -409,6 +434,7 @@ class RefreshManager:
     def import_redfin(self, payload, *, data_path=None):
         """Import one user-supplied export; never obtains cookies or calls Redfin."""
         from redfin_csv import parse_csv
+        from apify_refresh import _attached_evidence
         csv_text, filename = payload.get('csv'), payload.get('filename', '')
         if not isinstance(csv_text, str) or not isinstance(filename, str):
             raise ValueError('Expected csv text and a filename.')
@@ -434,10 +460,20 @@ class RefreshManager:
                     raise RuntimeError('The saved dataset could not be read. Import stopped without changing it.') from None
             else:
                 previous, existing = {}, []
-            merged, merge = merge_sales(existing, parsed['sales'], as_of=today_utc())
+            saved_exclusions = previous.get('excluded_attached_properties', [])
+            if not isinstance(saved_exclusions, list):
+                raise RuntimeError('Saved property exclusions could not be read. The import stopped without changing the map.')
+            exclusions = [evidence for raw in saved_exclusions if (evidence := _attached_evidence(raw))]
+            retained = _exclude_retained_attached(existing, exclusions)
+            incoming = _exclude_retained_attached(parsed['sales'], exclusions)
+            if not incoming:
+                raise ValueError('All eligible imported homes are already known to be attached. The saved map is intact.')
+            merged, merge = merge_sales(retained, incoming, as_of=today_utc())
             if merge['incoming_eligible'] == 0 or merge['conflicts'] == merge['incoming_eligible']:
                 raise ValueError('No incoming sales could be safely accepted. Existing records were preserved; check the export for conflicting values.')
             counts = dict(input=parsed['diagnostics']['input_count'], eligible=merge['incoming_eligible'],
+                          excluded_attached=len(parsed['sales']) - len(incoming),
+                          removed_attached=len(existing) - len(retained),
                           **{key: merge[key] for key in ('added', 'updated', 'duplicates', 'stale', 'conflicts', 'total')})
             audit = {key: parsed[key] for key in ('source', 'imported_at', 'export_sha256', 'export_filename',
                      'byte_count', 'observed_export_date_range', 'diagnostics')}

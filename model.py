@@ -7,6 +7,8 @@ import math
 import re
 from urllib.parse import urlparse
 
+from confidence import assess_confidence, AUDIT_GRID_METERS, SHADING_GRID_METERS
+
 EARTH_RADIUS_KM = 6371.0088
 MAX_RADIUS_KM = 3.0
 RADII_KM = (0.75, 1.5, 2.25, 3.0)
@@ -104,6 +106,9 @@ def model_description(as_of: date) -> dict:
         "home_type": "Detached single-family homes", "two_bed_weight": 0.75,
         "bedroom_buckets": [2, 3, 4, "5+"], "bedroom_matching_factor": 0.9,
         "bedroom_weight_definition": "0.9 raised to the difference between bedroom buckets (2, 3, 4, 5+), except 2-bedroom comps receive 0.75 for a subject with 3+ bedrooms. A 2-bedroom comp receives full bedroom weight for a 2-bedroom subject.",
+        "coverage_audit_grid_m": AUDIT_GRID_METERS,
+        "minimum_shading_grid_m": SHADING_GRID_METERS,
+        "geographic_resolution_definition": "Diameter enclosing 80% of comparable-sale weight; 250 m display sampling does not imply parcel-level evidence.",
         "maximum_radius_km": MAX_RADIUS_KM, "candidate_radii_km": list(RADII_KM),
         "spatial_kernel": "Gaussian: exp(-0.5 * (distance_km / (radius_km / 2))^2)",
         "size_kernel": "exp(-0.5 * (ln(comp_sqft / subject_sqft) / 0.25)^2)",
@@ -368,6 +373,7 @@ def estimate(sales: list[dict], lat: float, lng: float, sqft: float = 2500, beds
     }
     if len(comps) < 3 or effective < 2:
         result["notes"] = [result["message"], "At least 3 distinct homes and 2 effective comparable sales are required."]
+        result["evidence"] = assess_confidence(result, as_of)
         return result
     median = weighted_quantile(log_values, weights, 0.5)
     mad = weighted_quantile([abs(value - median) for value in log_values], weights, 0.5)
@@ -395,4 +401,5 @@ def estimate(sales: list[dict], lat: float, lng: float, sqft: float = 2500, beds
     ]
     if outlier_count:
         result["notes"].append(f"Reduced the influence of {outlier_count} extreme comparable price{'s' if outlier_count != 1 else ''}.")
+    result["evidence"] = assess_confidence(result, as_of)
     return result

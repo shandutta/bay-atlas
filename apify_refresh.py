@@ -450,7 +450,7 @@ def _attached_evidence(value):
         sold = parse_date(value.get('sold_date')).isoformat()
         evidence, address = value.get('attachment_evidence'), value.get('address')
         if (not isinstance(evidence, str) or not isinstance(address, str) or not address.strip()
-                or not re.fullmatch(r'Zillow (record|resoFacts)(\.(isAttached|is_attached|hasAttachedProperty) true'
+                or not re.fullmatch(r'Zillow (record|resoFacts|facts)(\.(isAttached|is_attached|hasAttachedProperty) true'
                                     r'|\.(isDetached|is_detached) false'
                                     r'| property subtype explicitly indicates an attached home)', evidence)):
             return None

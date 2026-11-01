@@ -24,13 +24,15 @@ Open [http://127.0.0.1:8788](http://127.0.0.1:8788). Choose **Update data** to i
 
 The target is detached single-family homes with at least two bedrooms. Recent sales receive the most weight; records older than two calendar years are excluded. Sparse areas remain unshaded. Bedroom count is a similarity preference, not an assumed price premium.
 
-Coverage depends on the data supplied. A completed county search does not prove every sale was returned, and single-family classification does not independently establish physical detachment. Explicit attached-home evidence is excluded. Estimates do not account for condition, renovation, lot size, school boundaries, views, or concessions. See [the model details](README-model.md).
+Coverage depends on the data supplied. A completed county search does not prove every sale was returned, and single-family classification does not independently establish physical detachment. Explicit attached-home evidence is excluded. Estimates do not account for condition, renovation, lot size, school boundaries, views, or concessions. See [the model details](README-model.md) and [confidence measures, validation, and map resolution](CONFIDENCE.md).
 
 ## Add data
 
 **Manual CSV:** download a supported Redfin sold-home export with House, 2+ bedrooms, 2,000–3,000 square feet, and sales within the last two years. Import it through **Update data**. Only explicit dated sold records are accepted. Availability and export limits depend on the source and market. The app does not automate Redfin login or read browser cookies.
 
 **Provider API:** the Apify adapter uses the `topapi/zillow-scraper` actor. The older HouseData/RapidAPI adapter is also supported. These are third-party services; this project is not affiliated with Zillow, Redfin, Apify, or RapidAPI. Use an account and data rights appropriate to your use. Provider settings start unconfigured, and paid execution is disabled by default. Review [provider setup and spending controls](PROVIDERS.md) before enabling requests.
+
+For offline coverage analysis and bounded, one-time gap filling, see [targeted acquisition](TARGETED_ACQUISITION.md). The `rapid_gap_source.py` adapter validates saved detailed Zillow sold responses from US Real Estate API; it makes no requests and is not a recurring refresh integration.
 
 Data, snapshots, usage ledgers, and geocoding caches are created under `data/`; provider credentials are stored under `private/`. Both directories are excluded from Git. Do not place sensitive files under `public/`, the only directory served as static assets.
 
@@ -70,11 +72,12 @@ It makes no API calls. Exit code 0 means the saved data passes the audit and the
 | --- | --- |
 | `server.py` | Standard-library HTTP service, data snapshots, geocoding, API boundary |
 | `model.py` | Eligibility rules, merge identity, weighted estimates |
+| `confidence.py` | Evidence-quality diagnostics and support resolution |
 | `refresh.py`, `apify_refresh.py`, `apify_source.py` | Provider configuration, bounded requests, checkpointed imports |
 | `redfin_csv.py` | Supported manual CSV validation |
 | `address_suggest.py` | Local and Photon address suggestions |
 | `public/` | Responsive UI, locally vendored Leaflet/fonts, map worker |
 | `tests/` | Offline unit and interaction tests with synthetic fixtures |
-| `scripts/` | Read-only import and publication audits |
+| `scripts/` | Import/coverage audits, historical validation, and bounded operator acquisition |
 
 Application code is available under the [MIT License](LICENSE). Third-party notices and licenses are retained in `public/vendor/`. The application license does not grant rights to map data or source listings; those retain their respective attribution and terms.

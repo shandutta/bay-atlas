@@ -15,7 +15,7 @@ function harness() {
     performance:{now:() => clock += 8}, setTimeout:callback => pending.push(callback)};
   vm.createContext(context);
   vm.runInContext(source, context);
-  return {send:data => context.self.onmessage({data}), output, pending};
+  return {send:data => context.self.onmessage({data}), output, pending, evaluate:code=>vm.runInContext(code,context)};
 }
 function sales(price = 2000000) {
   return Array.from({length:8}, (_, i) => ({lat:37.82 + i * .0001, lng:-122.25, price, sqft:2500, beds:3,
@@ -127,4 +127,79 @@ print(json.dumps([estimate(rows, 37.82, -122.25, beds=beds, as_of=date(2026,10,2
       'Selecting more bedrooms need not increase the estimate when matching comps are cheaper');
     assert.equal(worker.output[3].values[0], worker.output[4].values[0], 'Five or more bedrooms share one bucket');
   }
+});
+
+test('world-grid shading is stable across viewport requests and interpolates continuously', async () => {
+  const worker = harness();
+  const rows = Array.from({length:100}, (_,i) => ({...sales()[0],lat:37.82+(i%10-4.5)*.002,lng:-122.25+(Math.floor(i/10)-4.5)*.002,price:(700+i*4)*2500}));
+  await worker.send({...metadata,packed:packed(rows)});
+  const points=[[37.82,-122.25],[37.8200001,-122.25],[37.822,-122.247]];
+  await worker.send({...render(1,points),gridSpacingMeters:250});
+  await worker.send({...render(2,points.slice().reverse()),gridSpacingMeters:250});
+  const before=Array.from(worker.output[0].values),after=Array.from(worker.output[1].values);
+  assert.deepEqual(after.slice(4,6),before.slice(0,2),'A point must not change when viewport order/origin changes');
+  assert.ok(Math.abs(before[0]-before[2])<.1,'Sub-meter movement should not jump between grid cells');
+  assert.ok(before.every(Number.isFinite));
+});
+
+test('world-grid cache invalidates for new data and different subjects', async () => {
+  const worker=harness();
+  await worker.send({...metadata,packed:packed(sales())});
+  await worker.send({...render(1),gridSpacingMeters:250});
+  assert.equal(worker.output[0].values[0],800);
+  await worker.send({...metadata,packed:packed(sales(2500000))});
+  await worker.send({...render(2),gridSpacingMeters:250});
+  assert.equal(worker.output[1].values[0],1000);
+  const mixed=[...sales(1800000).map(s=>({...s,beds:2})),...sales(2500000).map(s=>({...s,beds:4}))];
+  await worker.send({...metadata,packed:packed(mixed)});
+  await worker.send({...render(3),beds:2,gridSpacingMeters:250});
+  await worker.send({...render(4),beds:4,gridSpacingMeters:250});
+  assert.ok(worker.output[3].values[0]>worker.output[2].values[0]);
+});
+
+test('unsupported world nodes fade to transparent without inventing a price', async () => {
+  const worker=harness();
+  await worker.send({...metadata,packed:packed(sales())});
+  await worker.send({...render(1,[[38.5,-122.25]]),gridSpacingMeters:250});
+  assert.deepEqual(Array.from(worker.output[0].values),[0,0]);
+});
+
+
+test('coarse interpolation never bridges missing evidence using one valid corner', () => {
+  const worker=harness();
+  worker.evaluate('evidenceAt = () => ({effective:12})');
+  worker.evaluate('estimate = (lat,lng) => lat < 37.82 && lng < -122.25 ? [800,1] : null');
+  for (const spacing of [250,500,2000,4000]) {
+    assert.equal(worker.evaluate(`surfaceEstimate(37.82,-122.25,2500,3,${spacing})`),null);
+  }
+});
+
+test('four supported corners cannot shade an unsupported center', async () => {
+  const worker=harness(), rad=Math.PI/180, radius=6378137, spacing=4000;
+  const step=spacing/Math.cos(37.8*rad);
+  const left=Math.floor(radius*(-122.25)*rad/step);
+  const bottom=Math.floor(radius*Math.log(Math.tan(Math.PI/4+37.82*rad/2))/step);
+  const unproject=(x,y)=>[(2*Math.atan(Math.exp(y*step/radius))-Math.PI/2)/rad,x*step/radius/rad];
+  const center=unproject(left+.5,bottom+.5), corners=[],rows=[];
+  for(let j=0;j<=1;j++)for(let i=0;i<=1;i++) {
+    corners.push(unproject(left+i,bottom+j));
+    // Each cluster sits about1km outward from its own corner and >3km
+    // from center. These are distinct, otherwise valid, synthetic homes.
+    const cluster=unproject(left+i+(i?1:-1)*.18,bottom+j+(j?1:-1)*.18);
+    for(let n=0;n<3;n++)rows.push({...sales()[0],lat:cluster[0]+n*.00001,lng:cluster[1]});
+  }
+  await worker.send({...metadata,packed:packed(rows)});
+  worker.evaluate('prepareSubject(2500,3)');
+  for(const [lat,lng] of corners)assert.ok(worker.evaluate(`estimate(${lat},${lng},2500,3)`));
+  assert.equal(worker.evaluate(`estimate(${center[0]},${center[1]},2500,3)`),null);
+  await worker.send({...render(1,[center]),gridSpacingMeters:spacing});
+  assert.deepEqual(Array.from(worker.output[0].values),[0,0]);
+});
+
+test('interpolated opacity cannot overstate actual-point effective support', () => {
+  const worker=harness();
+  worker.evaluate('evidenceAt = () => ({effective:2}); estimate = () => [800,1]');
+  const result=worker.evaluate('surfaceEstimate(37.82,-122.25,2500,3,250)');
+  assert.equal(result[0],800);
+  assert.equal(result[1],.24);
 });

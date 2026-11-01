@@ -2,6 +2,9 @@
 // Continuous scalar estimates. Colors encode $/sqft, never listing density.
 let bins = new Map(), weights = [1, .8, .55, .3, .15], generation = 0, subjectKey = '';
 const cell = .025, radians = Math.PI / 180;
+// Fixed world samples separate evidence resolution from device pixels.
+const projectionRadius = 6378137, referenceCosine = Math.cos(37.8 * radians);
+let gridCache = new Map();
 const maxLatDistance = 3 / 6371 / radians;
 function key(lat, lng) { return `${Math.floor(lat / cell)},${Math.floor(lng / cell)}`; }
 function quantile(items, q) {
@@ -19,13 +22,13 @@ function bedroomWeight(compBeds, subjectBeds) {
 function prepareSubject(sqft, beds) {
   const next = `${sqft},${beds}`;
   if (next === subjectKey) return;
-  subjectKey = next;
+  subjectKey = next; gridCache.clear();
   for (const bucket of bins.values()) for (const sale of bucket) {
     // Size and bedroom similarity depend on the subject, not the map pixel.
     sale.subjectWeight = sale.timeWeight * Math.exp(-.5 * (Math.log(sale.sqft / sqft) / .25) ** 2) * bedroomWeight(sale.beds, beds);
   }
 }
-function estimate(lat, lng, sqft, beds) {
+function evidenceAt(lat, lng) {
   const nearby = [], bx = Math.floor(lat / cell), by = Math.floor(lng / cell), cosLat = Math.cos(lat * radians);
   const counts = [0, 0, 0], radii = [.75, 1.5, 2.25, 3];
   for (let i = bx - 2; i <= bx + 2; i++) for (let j = by - 2; j <= by + 2; j++) {
@@ -54,11 +57,54 @@ function estimate(lat, lng, sqft, beds) {
   const total = items.reduce((s, a) => s + a.weight, 0), sumSquares = items.reduce((s, a) => s + a.weight ** 2, 0);
   const effective = total ** 2 / sumSquares;
   if (items.length < 3 || effective < 2) return null;
+  return {items,total,effective};
+}
+function supportOpacity(effective) { return Math.min(1, .24 + (effective - 2) / 10); }
+function estimate(lat, lng, sqft, beds) {
+  const evidence = evidenceAt(lat,lng);
+  if (!evidence) return null;
+  const {items,total,effective} = evidence;
   const median = quantile(items, .5), mad = quantile(items.map(a => ({value: Math.abs(a.value - median), weight:a.weight})), .5);
   const clamp = Math.max(.18, 3 * 1.4826 * mad);
   const value = Math.exp(items.reduce((s, a) => s + Math.max(median - clamp, Math.min(median + clamp, a.value)) * a.weight, 0) / total);
   // Opacity shows support continuously while hue carries the scalar price.
-  return [value, Math.min(1, .24 + (effective - 2) / 10)];
+  return [value, supportOpacity(effective)];
+}
+// Bilinear interpolation between world-anchored samples. A 250 m nominal
+// spacing is 246–253 m on the ground across the Bay Area. It is a rendering
+// scale, not a claim that independent price information exists every 250 m.
+function surfaceEstimate(lat, lng, sqft, beds, spacing) {
+  if (!(spacing >= 250)) return estimate(lat, lng, sqft, beds);
+  // Supported corners can surround an empty center. Check the actual point's
+  // same three-home/two-effective minimum before borrowing any grid colors.
+  // This skips the price sorting/refit, so cached grid estimates remain useful.
+  const localEvidence = evidenceAt(lat,lng);
+  if (!localEvidence) return null;
+  const step = spacing / referenceCosine;
+  const x = projectionRadius * lng * radians / step;
+  const y = projectionRadius * Math.log(Math.tan(Math.PI / 4 + lat * radians / 2)) / step;
+  const left = Math.floor(x), bottom = Math.floor(y), dx = x - left, dy = y - bottom;
+  let weightedValue = 0, support = 0;
+  for (let j = 0; j <= 1; j++) for (let i = 0; i <= 1; i++) {
+    const fraction = (i ? dx : 1 - dx) * (j ? dy : 1 - dy);
+    if (!fraction) continue;
+    const gx = left + i, gy = bottom + j, cacheKey = `${spacing},${gx},${gy}`;
+    let value;
+    if (gridCache.has(cacheKey)) value = gridCache.get(cacheKey);
+    else {
+      const nodeLat = (2 * Math.atan(Math.exp(gy * step / projectionRadius)) - Math.PI / 2) / radians;
+      const nodeLng = gx * step / projectionRadius / radians;
+      value = estimate(nodeLat, nodeLng, sqft, beds);
+      // Bound memory during long pan sessions. Recomputing preserves results.
+      if (gridCache.size >= 24000) gridCache.clear();
+      gridCache.set(cacheKey, value);
+    }
+    // Do not interpolate across missing evidence: a coarse zoom grid must
+    // never bridge an unsupported neighborhood using a single distant node.
+    if (!value) return null;
+    const w = fraction * value[1]; weightedValue += value[0] * w; support += w;
+  }
+  return support > 0 ? [weightedValue / support, Math.min(support,supportOpacity(localEvidence.effective))] : null;
 }
 self.onmessage = async ({data}) => {
   const current = ++generation;
@@ -67,7 +113,7 @@ self.onmessage = async ({data}) => {
     const asOf = Date.parse(data.asOf || new Date().toISOString().slice(0,10));
     const cutoffDate = new Date(asOf); cutoffDate.setUTCFullYear(cutoffDate.getUTCFullYear() - 2);
     const cutoff = data.oldestDate ? Date.parse(data.oldestDate) : +cutoffDate;
-    weights = data.weights || weights; bins = new Map(); subjectKey = '';
+    weights = data.weights || weights; bins = new Map(); subjectKey = ''; gridCache.clear();
     const packed = data.packed;
     const count = packed ? Math.floor(packed.length / 7) : (data.sales || []).length;
     for (let i = 0; i < count; i++) {
@@ -89,8 +135,8 @@ self.onmessage = async ({data}) => {
     let chunkStart = performance.now();
     for (let i = 0; i < count; i++) {
       if (current !== generation) return;
-      const result = packedPoints ? estimate(data.points[i * 2], data.points[i * 2 + 1], data.sqft, data.beds)
-        : estimate(data.points[i][0], data.points[i][1], data.sqft, data.beds);
+      const result = packedPoints ? surfaceEstimate(data.points[i * 2], data.points[i * 2 + 1], data.sqft, data.beds, data.gridSpacingMeters)
+        : surfaceEstimate(data.points[i][0], data.points[i][1], data.sqft, data.beds, data.gridSpacingMeters);
       if (result) { values[i * 2] = result[0]; values[i * 2 + 1] = result[1]; }
       // Yield so a pan, zoom or data refresh can cancel obsolete calculations.
       if ((i + 1) % 64 === 0 && performance.now() - chunkStart >= 8) {
