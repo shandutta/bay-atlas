@@ -19,7 +19,7 @@ import re
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from model import canonical_address, estimate, prepare_sales, same_property, source_identity, today_utc
+from model import canonical_address, estimate, exclude_market_quarantine, prepare_sales, same_property, source_identity, today_utc
 from confidence import VERSION as CONFIDENCE_VERSION, TARGET, assess_confidence
 
 KM_PER_LAT_DEGREE = 111.1950802335329
@@ -102,7 +102,14 @@ def audit(sales, as_of=None, grid_m=500, assessor=None, estimator=None, referenc
     assessor = assessor or confidence_profile
     cell_key(0, 0, grid_m)  # Validate spacing even when there are no sales.
     references = {tuple(row["cell"]): row for row in (reference_cells or [])}
+    quarantined = 0
+    if isinstance(sales, dict):
+        sales, quarantined = exclude_market_quarantine(sales.get("sales", sales.get("rows", [])),
+                                                       sales.get("market_sale_quarantine"))
     sales, diagnostics = prepare_sales(sales, as_of)
+    if quarantined:
+        diagnostics["input_count"] += quarantined
+        diagnostics["excluded"]["quarantined_market_sale"] = quarantined
     groups = defaultdict(list)
     property_indexes = ({}, {}, {})
     def property_keys(row):
@@ -200,7 +207,7 @@ def main():
     reference = json.loads(args.reference_audit.read_text()) if args.reference_audit else None
     if reference and reference["grid_m"] != args.grid_m:
         raise ValueError("Reference audit must use the same grid spacing")
-    report = audit(document["sales"] if isinstance(document, dict) else document,
+    report = audit(document,
                    args.as_of, args.grid_m, reference_cells=reference["cells"] if reference else None)
     report["input_sha256"] = hashlib.sha256(payload).hexdigest()
     args.output.parent.mkdir(parents=True, exist_ok=True)

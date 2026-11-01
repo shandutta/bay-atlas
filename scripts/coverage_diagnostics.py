@@ -16,7 +16,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from model import prepare_sales, today_utc
+from model import exclude_market_quarantine, prepare_sales, today_utc
 
 
 def _count(value):
@@ -36,7 +36,11 @@ def _place(value):
 def summarize(snapshot, *, as_of=None, cities=()):
     as_of = as_of or today_utc()
     rows = snapshot.get("sales", snapshot.get("rows", []))
-    prepared, diagnostics = prepare_sales(rows, as_of=as_of)
+    eligible, quarantined = exclude_market_quarantine(rows, snapshot.get("market_sale_quarantine"))
+    prepared, diagnostics = prepare_sales(eligible, as_of=as_of)
+    if quarantined:
+        diagnostics["input_count"] = len(rows)
+        diagnostics["excluded"]["quarantined_market_sale"] = quarantined
     city_counts = Counter(_place(row.get("city")) for row in prepared)
     for city in cities:
         city_counts.setdefault(_place(city), 0)

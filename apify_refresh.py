@@ -510,11 +510,13 @@ def _publish(manager, state, as_of):
     retained = [row for row in baseline if not isinstance(row, dict) or source_identity(row) not in exclusions]
     incoming = [row for row in rows if not isinstance(row, dict) or source_identity(row) not in exclusions]
     removed = len(baseline) - len(retained)
-    merged, counts = merge_sales(retained, incoming, as_of=as_of)
+    merged, counts = merge_sales(retained, incoming, as_of=as_of,
+                                 market_sale_quarantine=previous.get('market_sale_quarantine'))
     counts.update(removed_attached=removed, excluded_incoming_attached=len(rows) - len(incoming),
                   attached_exclusions_added=len(set(exclusions) - previous_exclusion_ids),
                   attached_exclusions_total=len(exclusions))
-    if not counts['incoming_eligible'] and not removed and not counts['attached_exclusions_added']:
+    if (not counts['incoming_eligible'] and not removed and not counts['attached_exclusions_added']
+            and not counts['removed_quarantined']):
         return checked(None)
     sources = sorted({source_provider(row['source_url']) for row in merged} - {None})
     completed = sum(job['state'] == 'succeeded' for job in generation['jobs'])

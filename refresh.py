@@ -468,10 +468,14 @@ class RefreshManager:
             incoming = _exclude_retained_attached(parsed['sales'], exclusions)
             if not incoming:
                 raise ValueError('All eligible imported homes are already known to be attached. The saved map is intact.')
-            merged, merge = merge_sales(retained, incoming, as_of=today_utc())
+            merged, merge = merge_sales(retained, incoming, as_of=today_utc(),
+                                        market_sale_quarantine=previous.get('market_sale_quarantine'))
+            if not merge['incoming_eligible'] and merge['excluded_quarantined']:
+                raise ValueError('All eligible imported sale events are under review and remain quarantined. The saved map is intact.')
             if merge['incoming_eligible'] == 0 or merge['conflicts'] == merge['incoming_eligible']:
                 raise ValueError('No incoming sales could be safely accepted. Existing records were preserved; check the export for conflicting values.')
             counts = dict(input=parsed['diagnostics']['input_count'], eligible=merge['incoming_eligible'],
+                          excluded_quarantined=merge['excluded_quarantined'], removed_quarantined=merge['removed_quarantined'],
                           excluded_attached=len(parsed['sales']) - len(incoming),
                           removed_attached=len(existing) - len(retained),
                           **{key: merge[key] for key in ('added', 'updated', 'duplicates', 'stale', 'conflicts', 'total')})
@@ -621,10 +625,11 @@ class RefreshManager:
             self.update(state='error',message='No verified eligible sales were returned within the request limit. The saved map is intact.',finished_at=now())
             return
         # Partial pulls retain older observations with their original dates/provenance.
-        valid, merge = merge_sales(previous.get('sales',previous.get('rows',[])), rows)
+        valid, merge = merge_sales(previous.get('sales',previous.get('rows',[])), rows,
+                                  market_sale_quarantine=previous.get('market_sale_quarantine'))
         sources = dataset_sources(valid)
         snapshot = dict(previous, updated_at=now(),source=' + '.join(sources) + ' sold-home snapshots',sources=sources,sales=valid,coverage={
-            'status':'partial','scope':cfg['scope'],'regions':region_counts,'new_verified_records':len(rows),
+            'status':'partial','scope':cfg['scope'],'regions':region_counts,'new_verified_records':merge['incoming_eligible'],
             'complete':False,'merge_counts':merge,
             'request_limit_reached':budget_hit,'refresh_calls':self.run_calls,
             'note':'Partial coverage: provider search limits and missing records can omit sales. Older cached observations retain their original sale dates. This is not a census of every home.'})
@@ -634,5 +639,5 @@ class RefreshManager:
         atomic_json(self.data/'snapshots'/('sales-'+stamp+'.json'),snapshot)
         atomic_json(self.data/'sales.json',snapshot)
         self.update(state='success',live_verified=True,last_success=snapshot['updated_at'],finished_at=now(),
-            message='Fetched '+str(len(rows))+' verified sales; '+str(len(valid))+' eligible sales in the map. '+('Request limit reached; coverage is partial.' if budget_hit else 'Coverage is partial; see source notes.'),
+            message='Accepted '+str(merge['incoming_eligible'])+' verified sales; '+str(len(valid))+' eligible sales in the map. '+('Request limit reached; coverage is partial.' if budget_hit else 'Coverage is partial; see source notes.'),
             progress={'completed':self.run_calls,'total':self.run_calls})

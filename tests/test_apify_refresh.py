@@ -179,6 +179,22 @@ class ApifyRefreshTests(unittest.TestCase):
         self.assertEqual(len(self.factory.starts), 1)
         self.assertEqual(subject.status(self.root)['credit_reserved_usd'], 0.10)
 
+    def test_persisted_market_quarantine_blocks_cached_event_and_preserves_metadata(self):
+        from test_market_quarantine import quarantine
+        event = sale()
+        metadata = quarantine(event)
+        path, _ = self.original([event])
+        path.write_text(json.dumps({'sales': [event], 'market_sale_quarantine': [metadata]}))
+        self.factory.items = [event, sale('56789')]
+        result = self.run_refresh()
+        self.assertTrue(result['published'])
+        saved = json.loads(path.read_text())
+        self.assertEqual(saved['market_sale_quarantine'], [metadata])
+        self.assertEqual([row['id'] for row in saved['sales']], ['56789'])
+        counts = saved['last_api_refresh']['counts']
+        self.assertEqual(counts['removed_quarantined'], 1)
+        self.assertEqual(counts['excluded_quarantined'], 1)
+
     def enable_paid(self, **changes):
         self.cfg.update(apify_free_plan_verified=False, apify_api_buffer_usd=0.25,
                         apify_paid_allowance=paid_allowance(**changes))

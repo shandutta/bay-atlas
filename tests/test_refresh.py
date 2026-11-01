@@ -146,6 +146,25 @@ class RefreshManagerTests(unittest.TestCase):
             self.manager.request({}, '/search')
         self.http.assert_not_called()
 
+    def test_housedata_refresh_preserves_market_quarantine_and_filters_exact_event(self):
+        from test_market_quarantine import quarantine
+        event = refresh.normalize_property(property_record())
+        metadata = quarantine(event)
+        self.manager.data.mkdir(parents=True, exist_ok=True)
+        path = self.manager.data / 'sales.json'
+        path.write_text(json.dumps({'sales': [event], 'market_sale_quarantine': [metadata]}))
+        def request(cfg, endpoint, **kwargs):
+            if endpoint == '/search':
+                return search_result()
+            return property_record()
+        with patch.object(refresh, 'EAST_BAY', ['Oakland, CA']), patch.object(self.manager, 'request', side_effect=request):
+            self.manager.run(self.cfg)
+        saved = json.loads(path.read_text())
+        self.assertEqual(saved['sales'], [])
+        self.assertEqual(saved['market_sale_quarantine'], [metadata])
+        self.assertEqual(saved['coverage']['merge_counts']['excluded_quarantined'], 1)
+        self.http.assert_not_called()
+
     def test_key_is_private_and_never_returned_in_status(self):
         configured = self.manager.configure({'api_key': FAKE_KEY})
         self.assertTrue(configured['configured'])

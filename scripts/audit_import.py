@@ -26,14 +26,16 @@ def main():
     args = parser.parse_args()
     root = args.root.resolve()
     sys.path.insert(0, str(root))
-    from model import (canonical_address, estimate, haversine_km, parse_date,
+    from model import (canonical_address, estimate, exclude_market_quarantine, haversine_km, parse_date,
                        prepare_sales, source_identity, today_utc, two_year_cutoff)
 
     as_of = args.as_of or today_utc()
     paths = [root / 'data/sales.json', root / 'data/apify-state.json']
     originals = [p.read_bytes() for p in paths]
     data, state = [json.loads(blob) for blob in originals]
-    rows = data.get('sales', data.get('rows', []))
+    saved_rows = data.get('sales', data.get('rows', []))
+    quarantine = data.get('market_sale_quarantine')
+    rows, quarantined = exclude_market_quarantine(saved_rows, quarantine)
     generation = state.get('generation') or {}
     generation_id = generation.get('id', '')
     if not re.fullmatch(r'[a-f0-9]{32}', generation_id):
@@ -70,10 +72,12 @@ def main():
             else:
                 staged = json.loads(stage_path.read_bytes())
                 staged_rows = staged.get('sales', [])
-                valid, stage_checks = prepare_sales(staged_rows, as_of=as_of)
+                eligible_stage, quarantined_stage = exclude_market_quarantine(staged_rows, quarantine)
+                valid, stage_checks = prepare_sales(eligible_stage, as_of=as_of)
                 stage_ids = {source_identity(r) for r in valid}
                 item.update(
-                    staged_rows=len(staged_rows), staged_unique_source_identities=len(stage_ids),
+                    staged_rows=len(staged_rows), quarantined_market_events=quarantined_stage,
+                    staged_unique_source_identities=len(stage_ids),
                     surviving_published_source_identities=len(stage_ids & published_ids),
                     stage_validation=stage_checks,
                     normalization_diagnostics=staged.get('diagnostics'),
@@ -145,7 +149,8 @@ def main():
         'all_jobs_terminal': terminal, 'current_generation_fully_published': published,
         'successful_counties': successful, 'expected_counties': expected_counties,
         'data_checks_pass': not failures, 'failures': failures, 'warnings': warnings,
-        'published_row_count': len(rows), 'current_eligible_count': len(prepared),
+        'published_row_count': len(rows), 'saved_row_count': len(saved_rows),
+        'quarantined_market_events': quarantined, 'current_eligible_count': len(prepared),
         'eligibility': diagnostics, 'oldest_allowed_date': two_year_cutoff(as_of).isoformat(),
         'sold_date_min': min((r['sold_date'] for r in prepared), default=None),
         'sold_date_max': max((r['sold_date'] for r in prepared), default=None),

@@ -5,7 +5,7 @@ from collections import Counter
 from datetime import date, datetime, timezone
 import math
 import re
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from confidence import assess_confidence, AUDIT_GRID_METERS, SHADING_GRID_METERS
 
@@ -171,6 +171,98 @@ def same_property(left: dict, right: dict) -> bool:
             and haversine_km(left["lat"], left["lng"], right["lat"], right["lng"]) <= 0.025)
 
 
+def _market_event_identity(row, *, require_id=False):
+    """A quarantine cannot target a provider label or an arbitrary URL path."""
+    url = row.get("source_url")
+    if not isinstance(url, str):
+        return None
+    provider = source_provider(url)
+    if provider is None:
+        return None
+    parsed = urlparse(url)
+    if (parsed.query or parsed.fragment or parsed.params
+            or any(part in {".", ".."} for part in unquote(parsed.path).split("/"))):
+        return None
+    pattern = (r"/homedetails/(?:[^/]+/)?([0-9]+)_zpid/?" if provider == "Zillow"
+               else r"/CA/[^/]+/[^/]+/home/([0-9]+)/?")
+    match = re.fullmatch(pattern, parsed.path)
+    if not match:
+        return None
+    value = row.get("source_id", row.get("id"))
+    if value is not None:
+        value = str(value).removeprefix(provider.lower() + ":")
+        if value != match[1]:
+            return None
+    elif require_id:
+        return None
+    return provider.lower() + ":" + match[1]
+
+
+def exclude_market_quarantine(rows: list, quarantine) -> tuple[list, int]:
+    """Exclude approved *sale events*, never every sale of a property.
+
+    Date and price must match exactly. Provider URL and ID must agree; a
+    cross-provider alias additionally needs a matching address/city within
+    25 meters. Malformed or unapproved entries have no filtering effect.
+    Audit/evidence fields remain private metadata and are not modified here.
+    """
+    events = {}
+    for entry in quarantine if isinstance(quarantine, list) else []:
+        if (not isinstance(entry, dict) or entry.get("approved") is not True
+                or entry.get("decision") != "quarantine_pending_market_sale_verification"):
+            continue
+        try:
+            identity = _market_event_identity(entry, require_id=True)
+            sold = entry.get("sold_date")
+            city = entry.get("city")
+            if (identity is None or not isinstance(sold, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", sold)
+                    or not isinstance(city, str) or not re.search(r"[a-zA-Z0-9]", city)):
+                continue
+            sold, price = parse_date(sold).isoformat(), finite_number(entry.get("price"))
+            if price <= 0:
+                continue
+            location = None
+            try:
+                lat, lng = finite_number(entry.get("lat")), finite_number(entry.get("lng"))
+                street = entry.get("street_address") or str(entry.get("address", "")).split(",", 1)[0]
+                if (isinstance(street, str) and re.match(r"\s*\d+\s+\S", street)
+                        and in_bay_area(lat, lng)):
+                    location = dict(entry, lat=lat, lng=lng)
+            except (ValueError, TypeError, OverflowError):
+                pass
+            events.setdefault((sold, price), []).append((identity, location))
+        except (ValueError, TypeError, OverflowError):
+            continue
+    if not events:
+        return list(rows), 0
+    retained = []
+    for row in rows:
+        excluded = False
+        if isinstance(row, dict):
+            try:
+                candidates = events.get((parse_date(row.get("sold_date")).isoformat(),
+                                         finite_number(row.get("price"))), [])
+                identity = _market_event_identity(row) if candidates else None
+                for quarantined_identity, location in candidates:
+                    if identity is None:
+                        break
+                    if identity == quarantined_identity:
+                        excluded = True
+                        break
+                    if location is not None:
+                        lat, lng = finite_number(row.get("lat")), finite_number(row.get("lng"))
+                        if (canonical_address(row).split("|", 1)[1] == canonical_address(location).split("|", 1)[1]
+                                and haversine_km(lat, lng, location["lat"], location["lng"]) <= 0.025
+                                and same_property(dict(row, lat=lat, lng=lng), location)):
+                            excluded = True
+                            break
+            except (ValueError, TypeError, OverflowError, KeyError):
+                pass
+        if not excluded:
+            retained.append(row)
+    return retained, len(rows) - len(retained)
+
+
 def prepare_sales(raw_sales: list, as_of: date | None = None, *, deduplicate=True) -> tuple[list[dict], dict]:
     as_of = as_of or today_utc()
     rejected = Counter()
@@ -245,8 +337,10 @@ def prepare_sales(raw_sales: list, as_of: date | None = None, *, deduplicate=Tru
     return cleaned, {"input_count": len(raw_sales), "eligible_count": len(cleaned), "excluded": dict(rejected)}
 
 
-def merge_sales(previous: list, incoming: list, as_of: date | None = None) -> tuple[list[dict], dict]:
+def merge_sales(previous: list, incoming: list, as_of: date | None = None, *, market_sale_quarantine=None) -> tuple[list[dict], dict]:
     """Retain newer evidence; only explicit rounded prices allow same-date correction."""
+    previous, removed_quarantined = exclude_market_quarantine(previous, market_sale_quarantine)
+    incoming, excluded_quarantined = exclude_market_quarantine(incoming, market_sale_quarantine)
     current, old_diagnostics = prepare_sales(previous, as_of)
     additions, new_diagnostics = prepare_sales(incoming, as_of, deduplicate=False)
     counts = dict(added=0, updated=0, duplicates=0, stale=0, conflicts=0)
@@ -303,7 +397,8 @@ def merge_sales(previous: list, incoming: list, as_of: date | None = None) -> tu
         else:
             counts["duplicates"] += 1
     current.sort(key=lambda row: row["sold_date"], reverse=True)
-    return current, dict(counts, total=len(current), previous_eligible=old_diagnostics["eligible_count"],
+    return current, dict(counts, removed_quarantined=removed_quarantined, excluded_quarantined=excluded_quarantined,
+                         total=len(current), previous_eligible=old_diagnostics["eligible_count"],
                          incoming_eligible=new_diagnostics["eligible_count"], excluded=new_diagnostics["excluded"])
 
 

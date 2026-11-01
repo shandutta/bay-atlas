@@ -149,6 +149,26 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(result['counts']['excluded_attached'], 0)
         self.assertEqual(result['counts']['added'], 1)
 
+    def test_market_event_quarantine_survives_csv_merge_and_allows_later_resale(self):
+        from test_market_quarantine import quarantine
+        event = zillow()
+        metadata = quarantine(event)
+        self.path.write_text(json.dumps({'sales': [], 'market_sale_quarantine': [metadata]}))
+        good = home(**{'ADDRESS': '200 Different St', URL_HEADER:
+                       'https://www.redfin.com/CA/Berkeley/200-Different-St-94707/home/5678'})
+        result = self.manager.import_redfin(self.payload([home(), good]))
+        self.assertEqual(result['counts']['excluded_quarantined'], 1)
+        saved = json.loads(self.path.read_text())
+        self.assertEqual(saved['market_sale_quarantine'], [metadata])
+        self.assertEqual([row['id'] for row in saved['sales']], ['redfin:5678'])
+        before = self.path.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'under review'):
+            self.manager.import_redfin(self.payload([home()]))
+        self.assertEqual(self.path.read_bytes(), before)
+        result = self.manager.import_redfin(self.payload([home(**{'SOLD DATE': 'October-29-2026'})]))
+        self.assertEqual(result['counts']['excluded_quarantined'], 0)
+        self.assertIn('redfin:1234', {row['id'] for row in json.loads(self.path.read_text())['sales']})
+
     def test_success_publishes_mixed_source_provenance_and_safe_counts(self):
         prior = json.loads(self.path.read_text())
         prior['coverage'].update(label='East Bay starter snapshot', counts={'Oakland': 257})

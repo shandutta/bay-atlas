@@ -36,6 +36,9 @@ def prepare_history(raw_rows, start, end):
     """
     records = []
     cutoff = model.two_year_cutoff(start)
+    if isinstance(raw_rows, dict):
+        raw_rows, _ = model.exclude_market_quarantine(raw_rows.get('sales', raw_rows.get('rows', [])),
+                                                     raw_rows.get('market_sale_quarantine'))
     for row in raw_rows:
         try:
             sold = model.parse_date(row.get('sold_date'))
@@ -185,8 +188,7 @@ def main():
         parser.error('--bootstrap must be between 0 and 10000')
     data_bytes = args.data.read_bytes()
     payload = json.loads(data_bytes)
-    raw_rows = payload['sales'] if isinstance(payload, dict) else payload
-    output = backtest(raw_rows, args.start, args.validation_start, args.end, args.bootstrap)
+    output = backtest(payload, args.start, args.validation_start, args.end, args.bootstrap)
     output.update(input_sha256=hashlib.sha256(data_bytes).hexdigest(),
                   generated_at=datetime.now(timezone.utc).isoformat())
     rendered = json.dumps(output, indent=2) + '\n'

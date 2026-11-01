@@ -18,7 +18,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlparse, unquote
 from urllib.request import Request, urlopen
 
-from model import BAY_BOUNDS, estimate, finite_number, in_bay_area, model_description, prepare_sales, source_provider, today_utc
+from model import BAY_BOUNDS, estimate, exclude_market_quarantine, finite_number, in_bay_area, model_description, prepare_sales, source_provider, today_utc
 from refresh import ImportBusyError, atomic_json
 from address_suggest import AddressSuggestions, MAX_QUERY_LENGTH, REQUEST_TIMEOUT, REQUEST_INTERVAL, precise_address_matches
 
@@ -87,7 +87,11 @@ class DataStore:
                 raw = source.get("sales", source.get("rows", []))
                 if not isinstance(raw, list):
                     raise ValueError("Sales must be an array")
-                sales, diagnostics = prepare_sales(raw, as_of)
+                eligible_raw, quarantined = exclude_market_quarantine(raw, source.get("market_sale_quarantine"))
+                sales, diagnostics = prepare_sales(eligible_raw, as_of)
+                if quarantined:
+                    diagnostics["input_count"] = len(raw)
+                    diagnostics["excluded"]["quarantined_market_sale"] = quarantined
             except FileNotFoundError:
                 status = "awaiting_data"
                 sales, diagnostics = [], {"input_count": 0, "eligible_count": 0, "excluded": {}}
