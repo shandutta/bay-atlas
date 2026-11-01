@@ -209,7 +209,8 @@ def exclude_market_quarantine(rows: list, quarantine) -> tuple[list, int]:
     events = {}
     for entry in quarantine if isinstance(quarantine, list) else []:
         if (not isinstance(entry, dict) or entry.get("approved") is not True
-                or entry.get("decision") != "quarantine_pending_market_sale_verification"):
+                or entry.get("decision") not in ("quarantine_pending_market_sale_verification",
+                                                 "quarantine_ineligible_property_sale")):
             continue
         try:
             identity = _market_event_identity(entry, require_id=True)

@@ -1,4 +1,4 @@
-"""Reviewed non-market sale events stay excluded; no real property fixtures."""
+"""Reviewed ineligible sale events stay excluded; no real property fixtures."""
 from datetime import date
 import contextlib
 import io
@@ -24,6 +24,15 @@ def quarantine(row=None, **changes):
 
 
 class MarketQuarantineTests(unittest.TestCase):
+    def test_reviewed_multiunit_sale_does_not_exclude_a_later_eligible_resale(self):
+        event = sale()
+        later = dict(event, sold_date='2026-10-28')
+        review = dict(quarantine(event), decision='quarantine_ineligible_property_sale',
+                      reason='Synthetic sale combines a detached house and multiple rental units')
+        kept, removed = exclude_market_quarantine([event, later], [review])
+        self.assertEqual(kept, [later])
+        self.assertEqual(removed, 1)
+
     def test_exact_source_event_excluded_without_hiding_a_later_or_corrected_sale(self):
         event = sale()
         later = dict(event, sold_date='2026-10-28')
@@ -55,7 +64,8 @@ class MarketQuarantineTests(unittest.TestCase):
 
     def test_malformed_unapproved_or_broad_entries_never_hide_a_sale(self):
         event, approved = sale(), quarantine()
-        mutations = [{'approved': False}, {'approved': 'true'}, {'decision': 'exclude'}, {'source_id': '*'},
+        mutations = [{'approved': False}, {'approved': 'true'}, {'decision': 'exclude'},
+                     {'decision': {}}, {'decision': []}, {'source_id': '*'},
                      {'source_id': '9999'}, {'source_url': 'https://www.zillow.com/'}, {'source_url': 123},
                      {'source_url': 'https://www.zillow.com/not-a-listing/1_zpid/'},
                      {'source_url': 'https://www.zillow.com/homedetails/1_zpid/?q=other'},
