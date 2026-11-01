@@ -36,6 +36,59 @@ def compressed_static(path: str, modified_ns: int, size: int) -> bytes:
     return gzip.compress(Path(path).read_bytes(), compresslevel=3, mtime=0)
 
 
+def _public_counts(value, names):
+    return {key: value[key] for key in names if type(value.get(key)) is int and value[key] >= 0}
+
+
+def public_import_summary(value):
+    """Expose aggregate import status, never the private review/audit record."""
+    if not isinstance(value, dict):
+        return None
+    summary = {}
+    if isinstance(value.get("counts"), dict):
+        summary["counts"] = _public_counts(value["counts"], (
+            "input", "eligible", "added", "updated", "duplicates", "stale", "conflicts", "total",
+            "excluded_attached", "removed_attached", "excluded_quarantined", "removed_quarantined"))
+    if value.get("refresh_mode") in ("manual_csv", "automatic_api"):
+        summary["refresh_mode"] = value["refresh_mode"]
+    if type(value.get("coverage_complete")) is bool:
+        summary["coverage_complete"] = value["coverage_complete"]
+    if isinstance(value.get("imported_at"), str):
+        try:
+            summary["imported_at"] = datetime.fromisoformat(value["imported_at"].replace("Z", "+00:00")).isoformat()
+        except ValueError:
+            pass
+    return summary
+
+
+def public_coverage_summary(value):
+    """Keep display text/counts while withholding provider and review payloads."""
+    if isinstance(value, str):
+        return value[:2000]
+    if not isinstance(value, dict):
+        return {"label": "Bay Area", "complete": False}
+    summary = {key: value[key][:2000] for key in ("label", "description", "note") if isinstance(value.get(key), str)}
+    summary.update(_public_counts(value, ("counties_completed", "counties_total")))
+    for key in ("complete", "county_searches_finished", "request_limit_reached"):
+        if type(value.get(key)) is bool:
+            summary[key] = value[key]
+    for key, allowed in (("status", ("partial", "complete")), ("scope", ("east_bay", "bay_area")),
+                         ("refresh_mode", ("manual_csv", "automatic_api"))):
+        if value.get(key) in allowed:
+            summary[key] = value[key]
+    if isinstance(value.get("verified_source_gaps"), list):
+        gaps = []
+        for gap in value["verified_source_gaps"][:20]:
+            if not isinstance(gap, dict) or not isinstance(gap.get("county"), str):
+                continue
+            public = {"county": gap["county"][:200], **_public_counts(gap, ("unreachable_count",))}
+            if gap.get("source_coverage") in ("partial", "unknown"):
+                public["source_coverage"] = gap["source_coverage"]
+            gaps.append(public)
+        summary["verified_source_gaps"] = gaps
+    return summary
+
+
 class DataStore:
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -117,14 +170,14 @@ class DataStore:
             if isinstance(source.get("warnings"), list):
                 warnings.extend(str(item)[:2000] for item in source["warnings"][:20])
             description = model_description(as_of)
-            coverage = source.get("coverage", {"label": "Bay Area", "complete": False})
+            coverage = public_coverage_summary(source.get("coverage"))
             if isinstance(coverage, dict) and coverage.get("note"):
                 warnings.append(str(coverage["note"])[:2000])
             providers = sorted({source_provider(row["source_url"]) for row in sales} - {None})
             provenance = str(source.get("source", " + ".join(providers) + " sold homes"))[:500]
             metadata = {
                 "updated_at": updated_at, "source": provenance, "status": status,
-                "sources": providers, "last_import": source.get("last_import"),
+                "sources": providers, "last_import": public_import_summary(source.get("last_import")),
                 "message": " ".join(warnings), "coverage": coverage,
                 "record_count": len(sales), "home_type": "Detached single-family homes",
                 "weights": description["time_weights"], "as_of": as_of.isoformat(),

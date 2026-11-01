@@ -61,6 +61,47 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(payload["metadata"]["status"], "awaiting_data")
         self.assertNotIn("rows", payload)
 
+    def test_data_summaries_never_expose_private_import_or_coverage_reviews(self):
+        path = Path(self.temp.name) / "private-import-summary.json"
+        private = "synthetic-private-review-marker"
+        path.write_text(json.dumps({"sales": [], "last_import": {
+            "counts": {"total": 12, "eligible": 3, "added": 2, "excluded_quarantined": 1,
+                       "updated": private, "stale": True, "conflicts": -1, "private_details": private},
+            "imported_at": "2026-10-31T12:00:00Z", "refresh_mode": "manual_csv", "coverage_complete": False,
+            "source": private, "export_filename": private, "export_sha256": private,
+            "market_sale_quarantine": [{"address": private, "source_id": private,
+                "evidence_file": private, "evidence_sha256": private, "raw_file": private, "raw_sha256": private}],
+            "review": {"decision": private, "reason": private}}, "coverage": {
+            "label": "County searches", "description": "Observed sales", "note": "Partial coverage",
+            "complete": False, "refresh_mode": "automatic_api", "counties_completed": 9, "counties_total": 9,
+            "county_searches_finished": True, "review": {"evidence_file": private}, "regions": {"private": private},
+            "verified_source_gaps": [{"county": "Example County, CA", "unreachable_count": 12,
+                "source_coverage": "partial", "run_id": private, "raw_file": private,
+                "review": {"market_sale_quarantine": private}}]}}))
+        with patch.object(self.server, "store", DataStore(path)):
+            status, payload = self.request("GET", "/api/data")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["metadata"]["last_import"], {
+            "counts": {"total": 12, "eligible": 3, "added": 2, "excluded_quarantined": 1},
+            "imported_at": "2026-10-31T12:00:00+00:00", "refresh_mode": "manual_csv", "coverage_complete": False})
+        self.assertEqual(payload["coverage"], payload["metadata"]["coverage"])
+        self.assertEqual(payload["coverage"]["verified_source_gaps"], [
+            {"county": "Example County, CA", "unreachable_count": 12, "source_coverage": "partial"}])
+        self.assertEqual(payload["coverage"]["counties_completed"], 9)
+        self.assertEqual(payload["coverage"]["description"], "Observed sales")
+        rendered = json.dumps(payload)
+        for forbidden in (private, "market_sale_quarantine", "evidence_file", "evidence_sha256", "raw_sha256"):
+            self.assertNotIn(forbidden, rendered)
+
+    def test_malformed_summary_fields_cannot_pass_private_text(self):
+        from server import public_import_summary, public_coverage_summary
+        self.assertIsNone(public_import_summary(["private"]))
+        self.assertEqual(public_import_summary({"counts": "private", "refresh_mode": "private",
+                                               "imported_at": "private", "coverage_complete": "private"}), {})
+        self.assertEqual(public_coverage_summary({"counties_completed": "private", "verified_source_gaps": [
+            None, {"county": ["private"]}, {"county": "Example", "unreachable_count": "private"}]}),
+            {"verified_source_gaps": [{"county": "Example"}]})
+
     def test_gzip_data_matches_plain_json_and_head_length(self):
         def fetch(method, encoding):
             conn = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
